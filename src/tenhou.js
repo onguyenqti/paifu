@@ -26,6 +26,103 @@ export function gameToTenhouJSON(game, { pretty = false } = {}) {
 
 const CALL_TYPE_PREFIXES = { chi: 'c', pon: 'p', kan: 'k', kakan: 'm', ankan: 'a' };
 
+// Generate a human-readable point string from score deltas, e.g. "8000点" or "2000-4000点".
+function pointText(result) {
+  const d = result.scoreDeltas;
+  if (!d) return '';
+  if (result.type === 'ron') {
+    return `${Math.abs(d[result.loser])}点`;
+  }
+  if (result.type === 'tsumo') {
+    const payments = d
+      .filter((_, i) => i !== result.winner)
+      .map(v => Math.abs(v))
+      .filter(v => v > 0)
+      .sort((a, b) => a - b);
+    const unique = [...new Set(payments)];
+    return unique.length === 1 ? `${unique[0]}all点` : `${unique[0]}-${unique[1]}点`;
+  }
+  return '';
+}
+
+// Convert our internal result object → Tenhou array format.
+// Ron emits one [deltas, detail] pair per winner; tsumo emits a single pair.
+function resultToLog(result) {
+  if (!result) return null;
+  const combined = result.scoreDeltas ?? Array(4).fill(0);
+
+  switch (result.type) {
+    case 'tsumo': {
+      const w = result.winner;
+      return ['和了', [...combined, 0], [w, w, w, pointText(result)]];
+    }
+    case 'ron': {
+      const loser   = result.loser ?? -1;
+      const winners = result.winners?.length ? result.winners : [{ player: result.winner }];
+      const parts   = [];
+      for (const { player: w } of winners) {
+        const gain     = combined[w] ?? 0;
+        const perDelta = combined.map((_, i) => i === w ? gain : i === loser ? -gain : 0);
+        parts.push([...perDelta, 0], [w, loser, w, `${gain}点`]);
+      }
+      return ['和了', ...parts];
+    }
+    case 'draw_exhausted':
+    case 'exhausted':
+      return ['流局', [...combined, 0]];
+    default:
+      return ['不明'];
+  }
+}
+
+// Convert Tenhou array format → our internal result object.
+// Handles any number of [deltas, detail] pairs after the type tag.
+// Tsumo: detail[0] === detail[1]. Ron: detail[1] is the loser.
+function resultFromLog(raw) {
+  if (!raw) return null;
+  if (!Array.isArray(raw)) return raw; // backwards-compat: old object format
+
+  const type = raw[0];
+
+  if (type === '和了') {
+    const pairs = [];
+    for (let i = 1; i + 1 < raw.length; i += 2) {
+      const d = raw[i], det = raw[i + 1];
+      if (Array.isArray(d) && Array.isArray(det)) pairs.push({ d, det });
+      else break;
+    }
+    if (!pairs.length) return null;
+
+    const [p0, p1] = pairs[0].det;
+    const isTsumo  = p0 === p1;
+    const loser    = isTsumo ? null : p1;
+
+    // Sum per-winner deltas into one combined array
+    const combined = Array(4).fill(0);
+    for (const { d } of pairs) d.slice(0, 4).forEach((v, i) => { combined[i] += v; });
+
+    return {
+      type:        isTsumo ? 'tsumo' : 'ron',
+      winner:      p0,
+      winners:     pairs.map(({ det }) => ({ player: det[0] })),
+      loser,
+      tile:        null,
+      scoreDeltas: combined,
+      finalScores: null,
+    };
+  }
+
+  if (type === '流局') {
+    return {
+      type:        'draw_exhausted',
+      scoreDeltas: Array.isArray(raw[1]) ? raw[1].slice(0, 4) : null,
+      finalScores: null,
+    };
+  }
+
+  return null;
+}
+
 function callActionToString(action) {
   const prefix = CALL_TYPE_PREFIXES[action.type];
   return prefix + action.tiles.map(t => String(t).padStart(2, '0')).join('');
@@ -51,16 +148,7 @@ function roundToLog(round) {
     return [round.hands[p].startingTiles, draws, discards];
   });
 
-  const result = round.result
-    ? {
-        type:        round.result.type,
-        winner:      round.result.winner,
-        loser:       round.result.loser,
-        tile:        round.result.tile,
-        scoreDeltas: round.result.scoreDeltas ?? null,
-        finalScores: round.result.finalScores ?? null,
-      }
-    : null;
+  const result = resultToLog(round.result);
 
   return [
     [roundNumber, round.honba, round.riichiSticks],
@@ -195,7 +283,7 @@ export function tenhouJSONToGame(jsonStr) {
       uraDoraIndicators: [...(uraDoras ?? [])],
       hands,
       actions,
-      result:            result ?? null,
+      result:            resultFromLog(result),
       _currentPlayer:    0,
       _callWindowPlayer: null,
       _callingPlayer:    null,
