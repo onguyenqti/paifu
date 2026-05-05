@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paifu Recorder</title>
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── Header ─────────────────────────────────────────────────────────── -->
+    <header class="app-header">
+      <h1 class="app-title">牌譜 Paifu Recorder</h1>
+      <nav class="toolbar">
+        <button id="btn-new"    class="tb-btn">New Game</button>
+        <button id="btn-save"   class="tb-btn">Save</button>
+        <button id="btn-load"   class="tb-btn">Load</button>
+        <button id="btn-export" class="tb-btn">Export JSON</button>
+        <button id="btn-import" class="tb-btn">Import JSON</button>
+      </nav>
+    </header>
+
+    <div class="app-body">
+
+      <!-- ── Nav sidebar: hand list ─────────────────────────────────────── -->
+      <div class="col-nav">
+        <div class="nav-header">Hands</div>
+        <div id="hand-nav" class="hand-nav"></div>
+      </div>
+
+      <!-- ── Centre column: game info + players ────────────────────────── -->
+      <div class="col-left">
+
+        <div class="round-bar">
+          <span id="round-display" class="round-name">—</span>
+          <span id="honba-display"  class="round-meta"></span>
+          <span id="riichi-display" class="round-meta"></span>
+          <div  id="dora-display"   class="dora-row"></div>
+        </div>
+
+        <div id="players-container" class="players-section"></div>
+
+      </div>
+
+      <!-- ── Right column: input + log ─────────────────────────────────── -->
+      <div class="col-right">
+
+        <div class="input-panel">
+          <div class="phase-row">
+            <span id="phase-label" class="phase-label">Setup</span>
+            <span id="active-player-label" class="active-player"></span>
+          </div>
+
+          <div class="input-row">
+            <input
+              id="tile-input"
+              type="text"
+              class="tile-input"
+              placeholder="e.g. 3m, 7p, 1z, E"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button id="btn-confirm" class="btn-primary">Confirm</button>
+          </div>
+
+          <div class="action-buttons">
+            <button id="btn-tsumo"    class="action-btn win-btn"  style="display:none">Tsumo</button>
+            <button id="btn-ron"      class="action-btn win-btn"  style="display:none">Ron</button>
+            <button id="btn-riichi"   class="action-btn riichi-btn" style="display:none">Riichi</button>
+            <button id="btn-chi"      class="action-btn call-btn" style="display:none">Chi</button>
+            <button id="btn-pon"      class="action-btn call-btn" style="display:none">Pon</button>
+            <button id="btn-kan"      class="action-btn call-btn" style="display:none">Kan</button>
+            <button id="btn-pass"     class="action-btn pass-btn" style="display:none">Pass</button>
+            <button id="btn-exhausted" class="action-btn draw-btn" style="display:none">Draw Exhausted</button>
+          </div>
+
+          <div id="hint-text" class="hint"></div>
+        </div>
+
+        <div class="log-panel">
+          <div class="log-header">Action Log</div>
+          <div id="action-log" class="action-log"></div>
+        </div>
+
+        <div class="tile-key">
+          <div class="key-title">Tile notation reference</div>
+          <div class="key-grid">
+            <span class="key-suit m">1m–9m</span><span>Man / Characters</span>
+            <span class="key-suit p">1p–9p</span><span>Pin / Circles</span>
+            <span class="key-suit s">1s–9s</span><span>Sou / Bamboo</span>
+            <span class="key-suit z">1z–7z</span><span>Honors (or E S W N G R H)</span>
+            <span class="key-suit aka">0m 0p 0s</span><span>Red five (aka dora)</span>
+          </div>
+          <div class="key-honors">
+            <strong>Winds:</strong> 1z=East &nbsp; 2z=South &nbsp; 3z=West &nbsp; 4z=North
+            &nbsp; (also E, S, N — West must be 3z)<br>
+            <strong>Dragons:</strong> 5z or W=Haku/White &nbsp; 6z or G=Hatsu/Green &nbsp; 7z or R=Chun/Red
+          </div>
+          <div class="key-hand">
+            <strong>Multi-tile hand shorthand:</strong> <code>123m456p789s1234z</code>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modal ──────────────────────────────────────────────────────────────── -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal-content" class="modal-content"></div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
