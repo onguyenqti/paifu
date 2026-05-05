@@ -276,12 +276,23 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .player-score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--yellow); }
 
 .hand-label  { color: var(--text-2); font-size: 11px; margin-right: 4px; }
-.hand-row, .draw-row, .discard-row, .meld-row {
+.hand-row, .draw-row, .discard-row, .meld-row, .turns-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
   gap: 2px;
   margin-bottom: 4px;
+}
+.turns-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 3px;
+  align-items: flex-start;
+}
+.turn-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .riichi-badge {
@@ -294,13 +305,67 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   margin-left: 4px;
 }
 
+.meld-sep {
+  width: 1px;
+  height: 44px;
+  background: var(--border);
+  margin: 0 8px;
+  flex-shrink: 0;
+  align-self: center;
+}
+
 .meld {
   display: inline-flex;
+  align-items: center;
   gap: 1px;
   padding: 2px 4px;
   background: var(--bg-3);
   border-radius: var(--radius-sm);
   margin-right: 4px;
+}
+
+/* Rotated tile wrapper: inner box matches the visual footprint of a rotated tile-sm
+   (44×32px), with the label sitting below in its normal orientation. */
+.tile-rotated-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  overflow: visible;
+}
+.tile-rotated-inner {
+  width: 44px;   /* tile-sm height = visual width after 90° rotation */
+  height: 32px;  /* tile-sm width  = visual height after 90° rotation */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+.tile-rotated-inner > .tile.tile-sm {
+  transform: rotate(90deg);
+  flex-shrink: 0;
+}
+.tile-rotated-wrap.suit-m > .tile-label { color: var(--m-color); }
+.tile-rotated-wrap.suit-p > .tile-label { color: var(--p-color); }
+.tile-rotated-wrap.suit-s > .tile-label { color: var(--s-color); }
+.tile-rotated-wrap.suit-z > .tile-label { color: var(--z-color); }
+.tile-rotated-wrap.aka    > .tile-label { color: var(--aka-color); }
+
+/* Call badge shown in the draw slot of the turns grid */
+.call-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 44px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.2;
 }
 
 /* ── Tiles ─────────────────────────────────────────────────────────────────── */
@@ -311,8 +376,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 46px;
+  width: 44px;
+  height: 60px;
   background: var(--tile-bg);
   border: 1.5px solid var(--tile-border);
   border-radius: 3px;
@@ -343,23 +408,23 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 }
 
 .tile.tile-sm {
-  width: 24px;
-  height: 34px;
+  width: 32px;
+  height: 44px;
 }
 
 .tile-glyph {
-  font-size: 22px;
+  font-size: 28px;
   line-height: 1;
 }
-.tile.tile-sm .tile-glyph { font-size: 16px; }
+.tile.tile-sm .tile-glyph { font-size: 21px; }
 
 .tile-label {
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   margin-top: 1px;
 }
-.tile.tile-sm .tile-label { font-size: 7px; }
+.tile.tile-sm .tile-label { font-size: 9px; }
 
 /* Suit colouring on the label */
 .tile.suit-m .tile-label { color: var(--m-color); }
@@ -578,6 +643,15 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   cursor: default;
 }
 .tile.tile-placeholder:hover { transform: none; }
+
+.tile.tsumogiri {
+  background: transparent;
+  border: 1.5px solid var(--bg-3);
+  box-shadow: none;
+  color: var(--text-2);
+  font-size: 16px;
+}
+.tile.tsumogiri.tile-sm { font-size: 17px; }
 
 /* ── Win scoring modal ─────────────────────────────────────────────────────── */
 .score-summary { margin-bottom: 14px; }

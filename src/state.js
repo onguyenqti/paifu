@@ -17,6 +17,7 @@ export function createGame(playerNames = ['Player 1', 'Player 2', 'Player 3', 'P
   return {
     meta: {
       players: [...playerNames],
+      title: ['', ''],
       rules: { rounds: 'east-south', basePoints: 25000 },
     },
     rounds: [],
@@ -158,24 +159,24 @@ export function applyAction(game, action) {
 
     case 'tsumo': {
       hand.tiles.push(action.tile);
-      if (action.scoreDeltas) {
-        for (let i = 0; i < 4; i++) round.scores[i] += action.scoreDeltas[i];
-      }
+      const tsumoFinal = action.scoreDeltas
+        ? round.scores.map((s, i) => s + action.scoreDeltas[i])
+        : [...round.scores];
       round.result = {
         type: 'tsumo',
         winner: action.player,
         tile: action.tile,
         scoreDeltas: action.scoreDeltas ?? null,
-        finalScores: [...round.scores],
+        finalScores: tsumoFinal,
       };
       game.phase = Phase.COMPLETE;
       break;
     }
 
     case 'ron': {
-      if (action.scoreDeltas) {
-        for (let i = 0; i < 4; i++) round.scores[i] += action.scoreDeltas[i];
-      }
+      const ronFinal = action.scoreDeltas
+        ? round.scores.map((s, i) => s + action.scoreDeltas[i])
+        : [...round.scores];
       round.result = {
         type: 'ron',
         winner: action.winner,
@@ -183,7 +184,7 @@ export function applyAction(game, action) {
         loser: action.loser,
         tile: action.tile,
         scoreDeltas: action.scoreDeltas ?? null,
-        finalScores: [...round.scores],
+        finalScores: ronFinal,
       };
       game.phase = Phase.COMPLETE;
       break;

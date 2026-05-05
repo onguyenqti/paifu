@@ -39,7 +39,7 @@ export function deleteFromStorage(name) {
 // ── File Download / Upload ─────────────────────────────────────────────────────
 
 export function exportToFile(game, filename) {
-  const json = gameToTenhouJSON(game);
+  const json = gameToTenhouJSON(game, { pretty: true });
   const blob = new Blob([json], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');

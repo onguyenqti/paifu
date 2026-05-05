@@ -2,6 +2,19 @@ import { tileToString, tileToUnicode, tileSuit, sortTiles } from './tiles.js';
 import { Phase, WIND_NAMES, phasePrompt, currentRound } from './state.js';
 import { YAKU, totalHan, fuOverride, computeScoreDeltas, paymentSummary } from './scoring.js';
 
+const CALL_TYPES  = new Set(['chi','pon','kan','kakan','ankan']);
+const CALL_LABELS = { chi: 'Chi', pon: 'Pon', kan: 'Kan', kakan: 'Kan+', ankan: 'Ankan' };
+
+// Index of the visually-rotated (called) tile within a meld display.
+// Convention: shimocha (right) → leftmost; toimen → middle; kamicha (left) → rightmost.
+function meldRotatedIndex(meld, callingPlayer) {
+  if (meld.type === 'ankan' || meld.calledFrom == null) return -1;
+  const rel = (meld.calledFrom - callingPlayer + 4) % 4;
+  if (rel === 1) return meld.tiles.length - 1;                  // shimocha → rightmost
+  if (rel === 2) return Math.floor((meld.tiles.length - 1) / 2); // toimen → middle
+  return 0;                                                      // kamicha → leftmost
+}
+
 // ── Tile rendering ─────────────────────────────────────────────────────────────
 
 export function tileEl(code, opts = {}) {
@@ -20,13 +33,34 @@ export function tileEl(code, opts = {}) {
 
   const label = document.createElement('span');
   label.className = 'tile-label';
-  label.textContent = tileToString(code);
+  label.textContent = opts.labelText ?? tileToString(code);
 
   el.appendChild(glyph);
-  el.appendChild(label);
+  if (!opts.noLabel) el.appendChild(label);
 
   if (opts.onClick) el.addEventListener('click', opts.onClick);
   return el;
+}
+
+// A tile displayed sideways (90° rotation) with the label sitting below in normal orientation.
+function rotatedTileEl(code) {
+  const suit  = tileSuit(code);
+  const isAka = code === 51 || code === 52 || code === 53;
+
+  const wrap = document.createElement('div');
+  wrap.className = `tile-rotated-wrap suit-${suit}${isAka ? ' aka' : ''}`;
+
+  const inner = document.createElement('div');
+  inner.className = 'tile-rotated-inner';
+  inner.appendChild(tileEl(code, { small: true, noLabel: true }));
+  wrap.appendChild(inner);
+
+  const lbl = document.createElement('span');
+  lbl.className = 'tile-label';
+  lbl.textContent = tileToString(code);
+  wrap.appendChild(lbl);
+
+  return wrap;
 }
 
 // tiles: array of tile codes
@@ -86,7 +120,7 @@ export function renderNavPanel(game, viewingIndex, onSelect, onAddHand) {
 
 // ── Round header ───────────────────────────────────────────────────────────────
 
-export function renderRoundHeader(round) {
+export function renderRoundHeader(round, { onDoraClick, editTarget } = {}) {
   const el    = document.getElementById('round-display');
   const honba = document.getElementById('honba-display');
   const riichi = document.getElementById('riichi-display');
@@ -105,12 +139,31 @@ export function renderRoundHeader(round) {
   riichi.textContent = `Riichi sticks: ${round.riichiSticks}`;
 
   dora.innerHTML = '';
-  if (round.doraIndicators.length) {
-    const label = document.createElement('span');
-    label.textContent = 'Dora: ';
-    dora.appendChild(label);
-    for (const t of round.doraIndicators) dora.appendChild(tileEl(t, { small: true }));
-  }
+
+  const addDoraGroup = (label, indicators, context) => {
+    const lbl = document.createElement('span');
+    lbl.textContent = label;
+    dora.appendChild(lbl);
+
+    indicators.forEach((t, i) => {
+      const opts = { small: true };
+      if (onDoraClick) opts.onClick = () => onDoraClick({ context, index: i, tile: t });
+      if (editTarget?.context === context && editTarget?.index === i) opts.editing = true;
+      dora.appendChild(tileEl(t, opts));
+    });
+
+    if (onDoraClick) {
+      const add = document.createElement('div');
+      add.className = 'tile tile-sm tile-add';
+      add.title     = `Add ${label.replace(':', '').trim().toLowerCase()}`;
+      add.textContent = '+';
+      add.addEventListener('click', () => onDoraClick({ context, add: true }));
+      dora.appendChild(add);
+    }
+  };
+
+  addDoraGroup('Dora:', round.doraIndicators, 'dora');
+  addDoraGroup('Ura:', round.uraDoraIndicators, 'uraDora');
 }
 
 // ── Player hands ───────────────────────────────────────────────────────────────
@@ -208,37 +261,97 @@ export function renderPlayers(game, round, { onTileClick, editTarget, onEditName
     startRow.appendChild(startList);
     pane.appendChild(startRow);
 
-    // 2. Draws
-    const drawActions = round.actions
+    // 2+3. Turns — draw slot (wall draw or call) above the matching discard
+    // drawSlotActions interleaves actual draws and calls in turn order for this player.
+    const drawSlotActions = round.actions
       .map((a, actionIdx) => ({ ...a, actionIdx }))
-      .filter(a => a.type === 'draw' && a.player === p);
-    const drawRow = makeRow('Draws:', 'draw-row');
-    drawRow.appendChild(tileListEl(drawActions.map(a => a.tile), {
-      small: true,
-      onTileClick: onTileClick && ((t, i) => onTileClick({
-        player: p, context: 'draw', index: i,
-        actionIdx: drawActions[i].actionIdx, tile: t,
-      })),
-      editingIndex: editTarget?.player === p && editTarget?.context === 'draw'
-        ? editTarget.index : -1,
-    }));
-    if (onTileClick) drawRow.appendChild(addTile(() => onTileClick({ player: p, context: 'draw', add: true })));
-    pane.appendChild(drawRow);
+      .filter(a =>
+        (a.type === 'draw' && a.player === p) ||
+        (CALL_TYPES.has(a.type) && a.callingPlayer === p)
+      );
+    const discardActions = round.actions
+      .map((a, actionIdx) => ({ ...a, actionIdx }))
+      .filter(a => (a.type === 'discard' || a.type === 'call_discard' || a.type === 'riichi') && a.player === p);
 
-    // 3. Discards
-    const discardRow = makeRow('Discards:', 'discard-row');
-    discardRow.appendChild(tileListEl(hand.discards, {
-      small: true,
-      onTileClick: onTileClick && ((t, i) => onTileClick({
-        player: p, context: 'discard', index: i, tile: t,
-      })),
-      editingIndex: editTarget?.player === p && editTarget?.context === 'discard'
-        ? editTarget.index : -1,
-    }));
-    if (onTileClick) discardRow.appendChild(addTile(() => onTileClick({ player: p, context: 'discard', add: true })));
-    pane.appendChild(discardRow);
+    // Track draw-only index within drawSlotActions for edit-target matching.
+    let drawOnlyCount = 0;
+    const drawOnlyIdxMap = drawSlotActions.map(a => a.type === 'draw' ? drawOnlyCount++ : -1);
 
-    // 4. Current Hand — read-only derived view
+    const turnsRow = makeRow('Turns:', 'turns-row');
+    const turnsGrid = document.createElement('div');
+    turnsGrid.className = 'turns-grid';
+
+    const colCount = Math.max(drawSlotActions.length, hand.discards.length);
+    for (let i = 0; i < colCount; i++) {
+      const col = document.createElement('div');
+      col.className = 'turn-col';
+
+      // Draw slot cell: tile for a wall draw, badge for a call
+      const a = drawSlotActions[i];
+      const drawOnlyIdx = drawOnlyIdxMap[i] ?? -1;
+      if (a?.type === 'draw') {
+        const tOpts = { small: true };
+        if (onTileClick) tOpts.onClick = () => onTileClick({
+          player: p, context: 'draw', index: drawOnlyIdx, actionIdx: a.actionIdx, tile: a.tile,
+        });
+        if (editTarget?.player === p && editTarget?.context === 'draw' && editTarget?.index === drawOnlyIdx)
+          tOpts.editing = true;
+        col.appendChild(tileEl(a.tile, tOpts));
+      } else if (a && CALL_TYPES.has(a.type)) {
+        const calledTile = a.calledTile ?? a.tiles?.[0];
+        if (calledTile != null) {
+          col.appendChild(tileEl(calledTile, { small: true, labelText: CALL_LABELS[a.type] }));
+        } else {
+          const badge = document.createElement('div');
+          badge.className = 'call-badge';
+          badge.textContent = CALL_LABELS[a.type] ?? a.type;
+          col.appendChild(badge);
+        }
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'tile tile-sm tile-placeholder';
+        col.appendChild(ph);
+      }
+
+      // Discard cell
+      if (i < hand.discards.length) {
+        const t = hand.discards[i];
+        const isTsumo = discardActions[i]?.tsumogiri ?? false;
+        const isEditing = editTarget?.player === p && editTarget?.context === 'discard' && editTarget?.index === i;
+        if (isTsumo) {
+          const el = document.createElement('div');
+          el.className = 'tile tile-sm tsumogiri' + (isEditing ? ' editing' : '') + (onTileClick ? ' clickable' : '');
+          el.title = tileToString(t);
+          el.textContent = '↓';
+          if (onTileClick) el.addEventListener('click', () => onTileClick({ player: p, context: 'discard', index: i, tile: t }));
+          col.appendChild(el);
+        } else {
+          const tOpts = { small: true };
+          if (onTileClick) tOpts.onClick = () => onTileClick({ player: p, context: 'discard', index: i, tile: t });
+          if (isEditing) tOpts.editing = true;
+          col.appendChild(tileEl(t, tOpts));
+        }
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'tile tile-sm tile-placeholder';
+        col.appendChild(ph);
+      }
+
+      turnsGrid.appendChild(col);
+    }
+
+    if (onTileClick) {
+      const addCol = document.createElement('div');
+      addCol.className = 'turn-col';
+      addCol.appendChild(addTile(() => onTileClick({ player: p, context: 'draw', add: true })));
+      addCol.appendChild(addTile(() => onTileClick({ player: p, context: 'discard', add: true })));
+      turnsGrid.appendChild(addCol);
+    }
+
+    turnsRow.appendChild(turnsGrid);
+    pane.appendChild(turnsRow);
+
+    // 4. Current Hand — sorted uncalled tiles, then open melds inline to the right
     const handRow = makeRow('Current Hand:', 'hand-row');
     handRow.appendChild(tileListEl(sortTiles(hand.tiles)));
     if (hand.inRiichi) {
@@ -247,18 +360,21 @@ export function renderPlayers(game, round, { onTileClick, editTarget, onEditName
       badge.textContent = 'Riichi';
       handRow.appendChild(badge);
     }
-    pane.appendChild(handRow);
-
     if (hand.melds.length) {
-      const meldRow = makeRow('Melds:', 'meld-row');
+      const sep = document.createElement('div');
+      sep.className = 'meld-sep';
+      handRow.appendChild(sep);
       for (const meld of hand.melds) {
         const meldEl = document.createElement('div');
         meldEl.className = 'meld';
-        for (const t of meld.tiles) meldEl.appendChild(tileEl(t, { small: true }));
-        meldRow.appendChild(meldEl);
+        const rotIdx = meldRotatedIndex(meld, p);
+        meld.tiles.forEach((t, ti) => {
+          meldEl.appendChild(ti === rotIdx ? rotatedTileEl(t) : tileEl(t, { small: true }));
+        });
+        handRow.appendChild(meldEl);
       }
-      pane.appendChild(meldRow);
     }
+    pane.appendChild(handRow);
 
     container.appendChild(pane);
   }
@@ -531,12 +647,11 @@ export function showRoundSetupModal(game, onConfirm) {
   const content = document.getElementById('modal-content');
   const prevRound = currentRound(game);
   const defaultScores = prevRound
-    ? prevRound.scores.map(s => s.toLocaleString()).join(', ')
+    ? (prevRound.result?.finalScores ?? prevRound.scores).map(s => s.toLocaleString()).join(', ')
     : '25000, 25000, 25000, 25000';
 
   content.innerHTML = `
     <h2>Start New Round</h2>
-    <label>Dora indicator tile: <input id="dora-input" type="text" placeholder="e.g. 5z" style="width:120px"></label><br><br>
     <label>Scores (comma-separated): <input id="scores-input" type="text" value="${defaultScores}" style="width:240px"></label><br><br>
     <label>Dealer (0-3): <input id="dealer-input" type="number" min="0" max="3" value="${prevRound ? ((prevRound.dealer+1)%4) : 0}" style="width:60px"></label><br><br>
     <label>Honba: <input id="honba-input" type="number" min="0" value="${prevRound ? prevRound.honba : 0}" style="width:60px"></label><br><br>
@@ -548,15 +663,12 @@ export function showRoundSetupModal(game, onConfirm) {
   overlay.classList.remove('hidden');
 
   document.getElementById('modal-confirm').addEventListener('click', () => {
-    const { parseTile } = window._tiles;
-    const doraStr  = document.getElementById('dora-input').value.trim();
     const scores   = document.getElementById('scores-input').value
       .split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
     const dealer   = parseInt(document.getElementById('dealer-input').value, 10);
     const honba    = parseInt(document.getElementById('honba-input').value, 10);
     overlay.classList.add('hidden');
     onConfirm({
-      doraIndicator: doraStr ? parseTile(doraStr) : null,
       scores: scores.length === 4 ? scores : null,
       dealer: isNaN(dealer) ? 0 : dealer % 4,
       honba:  isNaN(honba)  ? 0 : honba,
@@ -948,4 +1060,38 @@ export function showWinScoringModal(opts, onConfirm, onCancel) {
   content.appendChild(btnRow);
 
   overlay.classList.remove('hidden');
+}
+
+export function showTitleModal(currentTitle, onConfirm) {
+  const overlay = document.getElementById('modal-overlay');
+  const content = document.getElementById('modal-content');
+
+  content.innerHTML = `
+    <h2>Set Title</h2>
+    <label style="display:block;margin-bottom:10px">
+      Title line 1<br>
+      <input id="title-0" type="text" value="${currentTitle[0]}" style="width:100%" autocomplete="off">
+    </label>
+    <label style="display:block;margin-bottom:16px">
+      Title line 2<br>
+      <input id="title-1" type="text" value="${currentTitle[1]}" style="width:100%" autocomplete="off">
+    </label>
+    <div class="modal-buttons">
+      <button id="modal-confirm">Save</button>
+      <button id="modal-cancel">Cancel</button>
+    </div>
+  `;
+
+  overlay.classList.remove('hidden');
+  document.getElementById('title-0').focus();
+
+  const confirm = () => {
+    const t0 = document.getElementById('title-0').value;
+    const t1 = document.getElementById('title-1').value;
+    overlay.classList.add('hidden');
+    onConfirm([t0, t1]);
+  };
+
+  document.getElementById('modal-confirm').addEventListener('click', confirm);
+  document.getElementById('modal-cancel').addEventListener('click', () => overlay.classList.add('hidden'));
 }

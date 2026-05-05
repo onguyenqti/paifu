@@ -1,110 +1,73 @@
-// Tenhou-compatible JSON export/import
+// Format: { title, name, rule, log }
+//   log = [ round0, round1, … ]
+//   roundN = [[round_number, honba_count, riichi_sticks], [scores],
+//             [doras], [uradoras],
+//             hand0, p0draws, p0discards,
+//             hand1, p1draws, p1discards,
+//             hand2, p2draws, p2discards,
+//             hand3, p3draws, p3discards,
+//             result]
 //
-// Tile encoding (Tenhou standard):
-//   Man:    11-19    Pin:    21-29    Sou:    31-39
-//   Honors: 41-47    Aka:    51(0m) 52(0p) 53(0s)
-//
-// Log format (per hand):
-//   [scores, [honba,riichi], [doras], hand0, hand1, hand2, hand3,
-//    p0actions, p1actions, p2actions, p3actions, result]
-//
-//   Each pNactions array contains interleaved draw/discard events:
-//     { t: tile }           → draw
-//     { d: tile }           → discard
-//     { r: tile }           → riichi discard
-//     { c: tiles, f: from } → chi (tiles=full set, f=from player idx)
-//     { p: tiles, f: from } → pon
-//     { k: tiles, f: from, kt: type } → kan (type: 'closed'|'open'|'added')
-//     { w: tile, wt: 'tsumo'|'ron', wf: from? } → win
+//   round_number = roundWind * 4 + roundNum  (East1=0, East2=1, … South1=4 …)
+//   handN        = starting tile array
+//   pNdraws      = drawn tile codes; may include call strings e.g. "c131415"
+//   pNdiscards   = discarded tile codes; 60 = tsumogiri (discard the drawn tile)
+//   result       = { type, winner, loser, tile, scoreDeltas, finalScores } | null
 
-
-export function gameToTenhouJSON(game) {
+export function gameToTenhouJSON(game, { pretty = false } = {}) {
   const log = game.rounds.map(roundToLog);
   return JSON.stringify({
-    title: ['', ''],
-    name: game.meta.players,
-    rule: {
-      disp: '東南戦',
-      aka:  1,
-    },
+    title: game.meta.title ?? ['', ''],
+    name:  game.meta.players,
+    rule:  { disp: '東南戦', aka: 1 },
     log,
-  }, null, 2);
+  }, null, pretty ? 2 : 0);
+}
+
+const CALL_TYPE_PREFIXES = { chi: 'c', pon: 'p', kan: 'k', kakan: 'm', ankan: 'a' };
+
+function callActionToString(action) {
+  const prefix = CALL_TYPE_PREFIXES[action.type];
+  return prefix + action.tiles.map(t => String(t).padStart(2, '0')).join('');
 }
 
 function roundToLog(round) {
-  const playerActions = [[], [], [], []];
+  const roundNumber = round.roundWind * 4 + round.roundNum;
 
-  for (const action of round.actions) {
-    const p = action.player ?? action.callingPlayer ?? 0;
-    switch (action.type) {
-      case 'draw':
-        playerActions[p].push({ t: action.tile });
-        break;
-      case 'discard':
-        playerActions[p].push({ d: action.tile });
-        break;
-      case 'riichi':
-        playerActions[p].push({ r: action.tile });
-        break;
-      case 'call_discard':
-        playerActions[p].push({ d: action.tile });
-        break;
-      case 'chi':
-        playerActions[action.callingPlayer].push({
-          c: action.tiles,
-          f: action.calledFrom,
-        });
-        break;
-      case 'pon':
-        playerActions[action.callingPlayer].push({
-          p: action.tiles,
-          f: action.calledFrom,
-        });
-        break;
-      case 'kan':
-        playerActions[action.callingPlayer].push({
-          k: action.tiles,
-          f: action.calledFrom ?? -1,
-          kt: action.kanType,
-        });
-        break;
-      case 'tsumo':
-        playerActions[p].push({ t: action.tile, w: action.tile, wt: 'tsumo' });
-        break;
-      case 'ron':
-        playerActions[action.winner].push({
-          w: action.tile, wt: 'ron', wf: action.loser,
-        });
-        break;
-      case 'add_dora':
-      case 'add_ura_dora':
-      case 'pass':
-      case 'draw_exhausted':
-        break;
-    }
-  }
+  const playerData = [0, 1, 2, 3].flatMap(p => {
+    // Draws array: wall draws and calls interleaved in turn order, matching the discard array.
+    const draws = round.actions
+      .filter(a =>
+        (a.type === 'draw' && a.player === p) ||
+        (a.type in CALL_TYPE_PREFIXES && a.callingPlayer === p)
+      )
+      .map(a => a.type === 'draw' ? a.tile : callActionToString(a));
+    const discardActions = round.actions.filter(
+      a => (a.type === 'discard' || a.type === 'call_discard' || a.type === 'riichi') && a.player === p
+    );
+    const discards = round.hands[p].discards.map((tile, i) =>
+      discardActions[i]?.tsumogiri ? 60 : tile
+    );
+    return [round.hands[p].startingTiles, draws, discards];
+  });
 
   const result = round.result
     ? {
-        type: round.result.type,
-        winner: round.result.winner,
-        loser:  round.result.loser,
-        tile:   round.result.tile,
+        type:        round.result.type,
+        winner:      round.result.winner,
+        loser:       round.result.loser,
+        tile:        round.result.tile,
+        scoreDeltas: round.result.scoreDeltas ?? null,
+        finalScores: round.result.finalScores ?? null,
       }
     : null;
 
   return [
+    [roundNumber, round.honba, round.riichiSticks],
     round.scores,
-    [round.honba, round.riichiSticks],
     round.doraIndicators,
-    round.hands[0].tiles,
-    round.hands[1].tiles,
-    round.hands[2].tiles,
-    round.hands[3].tiles,
-    playerActions[0],
-    playerActions[1],
-    playerActions[2],
-    playerActions[3],
+    round.uraDoraIndicators,
+    ...playerData,
     result,
   ];
 }
@@ -113,37 +76,123 @@ export function tenhouJSONToGame(jsonStr) {
   const data = JSON.parse(jsonStr);
   const game = {
     meta: {
-      players: data.name ?? ['Player 1', 'Player 2', 'Player 3', 'Player 4'],
-      rules: { rounds: 'east-south', basePoints: 25000 },
+      players: data.name  ?? ['Player 1', 'Player 2', 'Player 3', 'Player 4'],
+      title:   data.title ?? ['', ''],
+      rules:   { rounds: 'east-south', basePoints: 25000 },
     },
     rounds: [],
-    phase: 'COMPLETE',
+    phase:     'COMPLETE',
     setupStep: 1,
   };
 
   for (const entry of (data.log ?? [])) {
-    const [scores, [honba, riichiSticks], doras, h0, h1, h2, h3,
-           a0, a1, a2, a3, result] = entry;
+    const [[roundNumber, honba, riichiSticks], scores, doras, uraDoras,
+           h0, d0, disc0, h1, d1, disc1,
+           h2, d2, disc2, h3, d3, disc3,
+           result] = entry;
 
-    const hands = [h0, h1, h2, h3].map((tiles) => ({
-      tiles:      [...(tiles ?? [])],
-      melds:      [],
-      discards:   [],
-      inRiichi:   false,
-      riichiTurn: -1,
-    }));
+    // Parse a call string like "c131415", "p272727", "k11111111"
+    // c=chi, p=pon, k=open kan, m=kakan (added kan), a=ankan (closed kan)
+    const parseCall = (s, callingPlayer) => {
+      const c = s[0];
+      const tiles = [];
+      for (let i = 1; i < s.length; i += 2) tiles.push(parseInt(s.slice(i, i + 2), 10));
+      const type = c === 'c' ? 'chi' : c === 'p' ? 'pon'
+                 : c === 'k' ? 'kan' : c === 'm' ? 'kakan' : 'ankan';
+      const fromHandCount = c === 'a' ? 4 : c === 'k' ? 3 : 2;
+      // Chi is always called from kamicha (player to the left, i.e. (p+3)%4)
+      const calledFrom = c === 'c' ? (callingPlayer + 3) % 4 : null;
+      return { type, tiles, fromHandCount, calledFrom };
+    };
 
-    const actions = reconstructActions(a0, a1, a2, a3);
+    // Keep rawDraws intact so position i in draws aligns with position i in discards.
+    // Tsumogiri (60) means "discard the tile drawn this turn" — use rawDraws[i] to resolve it.
+    const processPlayer = (starting, rawDraws, rawDiscs) => {
+      const rds  = rawDraws ?? [];
+      const rdsc = rawDiscs ?? [];
+      const discards = rdsc.map((t, i) =>
+        t === 60 ? (typeof rds[i] === 'number' ? rds[i] : null) : t
+      ).filter(t => typeof t === 'number' && t !== null);
+      return { starting: starting ?? [], rawDraws: rds, rawDiscs: rdsc, discards };
+    };
+
+    const players = [
+      processPlayer(h0, d0, disc0),
+      processPlayer(h1, d1, disc1),
+      processPlayer(h2, d2, disc2),
+      processPlayer(h3, d3, disc3),
+    ];
+
+    // Build hands: replay draws/calls/discards in turn order to derive current tiles and melds
+    const hands = players.map(({ starting, rawDraws, discards }, p) => {
+      const tiles = [...starting];
+      const melds = [];
+      const turnCount = Math.max(rawDraws.length, discards.length);
+      for (let i = 0; i < turnCount; i++) {
+        const draw = rawDraws[i];
+        if (typeof draw === 'string') {
+          const call = parseCall(draw, p);
+          let removed = 0;
+          for (const t of call.tiles) {
+            if (removed >= call.fromHandCount) break;
+            const idx = tiles.indexOf(t);
+            if (idx !== -1) { tiles.splice(idx, 1); removed++; }
+          }
+          melds.push({ type: call.type, tiles: call.tiles, calledFrom: call.calledFrom });
+        } else if (typeof draw === 'number') {
+          tiles.push(draw);
+        }
+        if (i < discards.length) {
+          const idx = tiles.indexOf(discards[i]);
+          if (idx !== -1) tiles.splice(idx, 1);
+        }
+      }
+      return {
+        startingTiles: [...starting],
+        tiles,
+        melds,
+        discards,
+        inRiichi:   false,
+        riichiTurn: -1,
+      };
+    });
+
+    // Build actions: draw, call, and discard actions per player (with tsumogiri flag)
+    const actions = [];
+    for (let p = 0; p < 4; p++) {
+      const { rawDraws, rawDiscs } = players[p];
+      const len = Math.max(rawDraws.length, rawDiscs.length);
+      for (let i = 0; i < len; i++) {
+        const draw = rawDraws[i];
+        if (typeof draw === 'string') {
+          const call = parseCall(draw, p);
+          actions.push({ type: call.type, callingPlayer: p, tiles: call.tiles, calledFrom: call.calledFrom });
+        } else if (typeof draw === 'number') {
+          actions.push({ type: 'draw', player: p, tile: draw });
+        }
+        if (i < rawDiscs.length) {
+          const raw = rawDiscs[i];
+          const tile = raw === 60
+            ? (typeof draw === 'number' ? draw : null)
+            : (typeof raw === 'number' ? raw : null);
+          if (tile !== null)
+            actions.push({ type: 'discard', player: p, tile, tsumogiri: raw === 60 });
+        }
+      }
+    }
+
+    const roundWind = Math.floor((roundNumber ?? game.rounds.length) / 4);
+    const roundNum  = (roundNumber ?? game.rounds.length) % 4;
 
     game.rounds.push({
       dealer:            0,
-      honba:             honba ?? 0,
+      honba:             honba        ?? 0,
       riichiSticks:      riichiSticks ?? 0,
-      roundWind:         Math.floor(game.rounds.length / 4),
-      roundNum:          game.rounds.length % 4,
-      scores:            [...(scores ?? [25000, 25000, 25000, 25000])],
-      doraIndicators:    [...(doras ?? [])],
-      uraDoraIndicators: [],
+      roundWind,
+      roundNum,
+      scores:            [...(scores ?? Array(4).fill(25000))],
+      doraIndicators:    [...(doras    ?? [])],
+      uraDoraIndicators: [...(uraDoras ?? [])],
       hands,
       actions,
       result:            result ?? null,
@@ -155,31 +204,4 @@ export function tenhouJSONToGame(jsonStr) {
   }
 
   return game;
-}
-
-function reconstructActions(a0, a1, a2, a3) {
-  const actions = [];
-  for (let p = 0; p < 4; p++) {
-    const pActions = [a0, a1, a2, a3][p] ?? [];
-    for (const ev of pActions) {
-      if (ev.wt === 'tsumo') {
-        actions.push({ type: 'tsumo', player: p, tile: ev.t });
-      } else if (ev.wt === 'ron') {
-        actions.push({ type: 'ron', winner: p, loser: ev.wf, tile: ev.w });
-      } else if (ev.t !== undefined) {
-        actions.push({ type: 'draw', player: p, tile: ev.t });
-      } else if (ev.r !== undefined) {
-        actions.push({ type: 'riichi', player: p, tile: ev.r });
-      } else if (ev.d !== undefined) {
-        actions.push({ type: 'discard', player: p, tile: ev.d });
-      } else if (ev.c !== undefined) {
-        actions.push({ type: 'chi', callingPlayer: p, calledFrom: ev.f, tiles: ev.c, fromHand: [], calledTile: ev.c[0] });
-      } else if (ev.p !== undefined) {
-        actions.push({ type: 'pon', callingPlayer: p, calledFrom: ev.f, tiles: ev.p, fromHand: [], calledTile: ev.p[0] });
-      } else if (ev.k !== undefined) {
-        actions.push({ type: 'kan', callingPlayer: p, calledFrom: ev.f, tiles: ev.k, kanType: ev.kt, fromHand: [], calledTile: ev.k[0] });
-      }
-    }
-  }
-  return actions;
 }

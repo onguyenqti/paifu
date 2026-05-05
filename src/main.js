@@ -6,10 +6,11 @@ import {
   saveToStorage, loadFromStorage, listSaves, deleteFromStorage,
   exportToFile, importFromFile,
 } from './storage.js';
+import { gameToTenhouJSON } from './tenhou.js';
 import {
   renderNavPanel, renderRoundHeader, renderPlayers, renderControls, renderLog,
   showSaveModal, showCallModal, showSaveNameModal, showRoundSetupModal, showSingleNameModal,
-  showWinScoringModal,
+  showWinScoringModal, showTitleModal,
 } from './ui.js';
 
 // Expose parsers for modal use
@@ -49,13 +50,29 @@ function render() {
   const vRound    = viewingRound();
   const vIndex    = viewingRoundIndex ?? (game.rounds.length - 1);
   renderNavPanel(game, vIndex, onSelectRound, onAddHand);
-  renderRoundHeader(vRound);
+  renderRoundHeader(vRound, { onDoraClick, editTarget });
   renderPlayers(game, vRound, { onTileClick, editTarget, onEditName });
   renderControls(game);
   renderLog(game, vRound);
 }
 
 // ── Tile editing ───────────────────────────────────────────────────────────────
+
+function onDoraClick(target) {
+  editTarget = target;
+  const input = document.getElementById('tile-input');
+  input.style.display = '';
+  if (target.add) {
+    input.value = '';
+    input.placeholder = 'New dora indicator…';
+    showHint(`Adding ${target.context === 'uraDora' ? 'ura ' : ''}dora — type tile and confirm, or Esc to cancel`);
+  } else {
+    input.value = tileToString(target.tile);
+    input.select();
+    showHint(`Editing ${target.context === 'uraDora' ? 'ura ' : ''}dora ${tileToString(target.tile)} — type replacement and confirm, or Esc to cancel`);
+  }
+  input.focus();
+}
 
 function onTileClick(target) {
   editTarget = target;
@@ -76,6 +93,18 @@ function onTileClick(target) {
 function applyEdit(newTile) {
   const round = currentRound(game);
   const { player, context, index, actionIdx, tile: oldTile, add } = editTarget;
+
+  if (context === 'dora') {
+    if (add) round.doraIndicators.push(newTile);
+    else round.doraIndicators[index] = newTile;
+    return;
+  }
+  if (context === 'uraDora') {
+    if (add) round.uraDoraIndicators.push(newTile);
+    else round.uraDoraIndicators[index] = newTile;
+    return;
+  }
+
   const hand = round.hands[player];
 
   if (add) {
@@ -165,13 +194,14 @@ function submitInput(rawValue) {
     case Phase.DISCARD:
     case Phase.CALL_DISCARD: {
       let tile;
+      let tsumogiri = false;
       if (!value) {
-        // Empty → tsumogiri: discard the most recently drawn tile
         const lastDraw = [...round.actions].reverse().find(
           a => a.type === 'draw' && a.player === round._currentPlayer
         );
         tile = lastDraw?.tile ?? null;
         if (tile === null) { showHint('No drawn tile to discard.'); return; }
+        tsumogiri = true;
       } else {
         tile = parseTile(value);
         if (tile === null) { showHint('Unrecognised tile.'); return; }
@@ -181,7 +211,7 @@ function submitInput(rawValue) {
         return;
       }
       const type = game.phase === Phase.CALL_DISCARD ? 'call_discard' : 'discard';
-      applyAction(game, { type, player: round._currentPlayer, tile });
+      applyAction(game, { type, player: round._currentPlayer, tile, tsumogiri });
       break;
     }
 
@@ -310,8 +340,19 @@ function handleLoad() {
   );
 }
 
+function handleSetTitle() {
+  showTitleModal(game.meta.title ?? ['', ''], (title) => {
+    game.meta.title = title;
+  });
+}
+
 function handleExport() {
   exportToFile(game);
+}
+
+function handleTenhouView() {
+  const json = gameToTenhouJSON(game);
+  window.open('https://tenhou.net/5/#json=' + encodeURIComponent(json), '_blank');
 }
 
 async function handleImport() {
@@ -365,10 +406,12 @@ function showHint(msg) {
 document.addEventListener('DOMContentLoaded', () => {
   // Toolbar
   document.getElementById('btn-new').addEventListener('click', handleNewGame);
+  document.getElementById('btn-title').addEventListener('click', handleSetTitle);
   document.getElementById('btn-save').addEventListener('click',   handleSave);
   document.getElementById('btn-load').addEventListener('click',   handleLoad);
   document.getElementById('btn-export').addEventListener('click', handleExport);
   document.getElementById('btn-import').addEventListener('click', handleImport);
+  document.getElementById('btn-tenhou').addEventListener('click', handleTenhouView);
 
   // Confirm input
   document.getElementById('btn-confirm').addEventListener('click', () => {
