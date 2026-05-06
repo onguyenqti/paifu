@@ -4,13 +4,13 @@ import {
 } from './state.js';
 import {
   saveToStorage, loadFromStorage, listSaves, deleteFromStorage,
-  exportToFile, importFromFile,
+  importFromFile,
 } from './storage.js';
 import { gameToTenhouJSON } from './tenhou.js';
 import {
   renderNavPanel, renderRoundHeader, renderPlayers, renderControls, renderLog,
   showSaveModal, showCallModal, showSaveNameModal, showRoundSetupModal, showSingleNameModal,
-  showWinScoringModal, showTitleModal,
+  showWinScoringModal, showTitleModal, showDiscardEditCallModal,
 } from './ui.js';
 
 // Expose parsers for modal use
@@ -50,7 +50,7 @@ function render() {
   const vRound    = viewingRound();
   const vIndex    = viewingRoundIndex ?? (game.rounds.length - 1);
   renderNavPanel(game, vIndex, onSelectRound, onAddHand);
-  renderRoundHeader(vRound, { onDoraClick, editTarget });
+  renderRoundHeader(vRound, { onDoraClick, editTarget, title: game.meta.title, onTitleClick: handleSetTitle });
   renderPlayers(game, vRound, { onTileClick, editTarget, onEditName });
   renderControls(game);
   renderLog(game, vRound);
@@ -147,12 +147,92 @@ function applyEdit(newTile) {
   }
 }
 
+// Insert or replace a call action at the calling player's K-th draw slot.
+// K = capturedTarget.index (the discard index = the turn slot in the game).
+function applyDiscardCall(round, capturedTarget, callInfo) {
+  const { player: discarder, index } = capturedTarget;
+  const CALL_TYPES = new Set(['chi', 'pon', 'kan', 'kakan', 'ankan']);
+
+  // Global actions index of player p's k-th draw slot (wall draw or call by p).
+  function callerSlotGlobalIdx(p, k) {
+    let count = 0;
+    for (let i = 0; i < round.actions.length; i++) {
+      const a = round.actions[i];
+      if ((a.type === 'draw' && a.player === p) ||
+          (CALL_TYPES.has(a.type) && a.callingPlayer === p)) {
+        if (count === k) return i;
+        count++;
+      }
+    }
+    return -1;
+  }
+
+  // Remove any existing call from discarder whose draw-slot index equals `index`.
+  for (let i = 0; i < round.actions.length; i++) {
+    const a = round.actions[i];
+    if (!CALL_TYPES.has(a.type) || a.calledFrom !== discarder) continue;
+    let slotsBefore = 0;
+    for (let j = 0; j < i; j++) {
+      const b = round.actions[j];
+      if ((b.type === 'draw' && b.player === a.callingPlayer) ||
+          (CALL_TYPES.has(b.type) && b.callingPlayer === a.callingPlayer)) slotsBefore++;
+    }
+    if (slotsBefore === index) {
+      const oldHand = round.hands[a.callingPlayer];
+      for (const t of (a.fromHand ?? [])) oldHand.tiles.push(t);
+      for (let mi = oldHand.melds.length - 1; mi >= 0; mi--) {
+        if (oldHand.melds[mi].type === a.type && oldHand.melds[mi].calledFrom === discarder) {
+          oldHand.melds.splice(mi, 1); break;
+        }
+      }
+      round.actions.splice(i, 1);
+      break;
+    }
+  }
+
+  if (!callInfo) return;
+
+  const { callType, callingPlayer, tiles, fromHand, calledTile } = callInfo;
+  const callAction = { type: callType, callingPlayer, calledFrom: discarder, calledTile, tiles, fromHand };
+
+  let insertPos = callerSlotGlobalIdx(callingPlayer, index);
+  if (insertPos === -1) insertPos = round.actions.length;
+  round.actions.splice(insertPos, 0, callAction);
+
+  const callerHand = round.hands[callingPlayer];
+  for (const t of fromHand) {
+    const idx = callerHand.tiles.lastIndexOf(t);
+    if (idx !== -1) callerHand.tiles.splice(idx, 1);
+  }
+  callerHand.melds.push({ type: callType, tiles, calledFrom: discarder, calledTile });
+}
+
 // ── Input submission ───────────────────────────────────────────────────────────
 
 function submitInput(rawValue) {
   if (editTarget) {
     const newTile = parseTile(rawValue.trim());
     if (newTile === null) { showHint('Unrecognised tile.'); return; }
+
+    if (editTarget.context === 'discard') {
+      const capturedTarget = { ...editTarget };
+      applyEdit(newTile);
+      editTarget = null;
+      const round = currentRound(game);
+      if (capturedTarget.add) {
+        capturedTarget.index = round.hands[capturedTarget.player].discards.length - 1;
+      }
+      showDiscardEditCallModal(
+        { tile: newTile, discarder: capturedTarget.player, playerNames: game.meta.players },
+        (callInfo) => {
+          applyDiscardCall(round, capturedTarget, callInfo);
+          clearInput();
+          render();
+        },
+      );
+      return;
+    }
+
     applyEdit(newTile);
     editTarget = null;
     clearInput();
@@ -236,8 +316,8 @@ function handleTsumo() {
     const winner = round._currentPlayer;
     showWinScoringModal(
       { isTsumo: true, tile, winner, loser: null, round, playerNames: game.meta.players },
-      ({ scoreDeltas }) => {
-        applyAction(game, { type: 'tsumo', player: winner, tile, scoreDeltas });
+      ({ winners, scoreDeltas }) => {
+        applyAction(game, { type: 'tsumo', player: winner, tile, scoreDeltas, winners });
         clearInput();
         render();
       },
@@ -326,7 +406,9 @@ function handleExhausted() {
 // ── Save / Load / Export ───────────────────────────────────────────────────────
 
 function handleSave() {
-  showSaveNameModal((name) => {
+  const title = game.meta.title ?? ['', ''];
+  const defaultName = title.filter(t => t).join(' ').trim() || 'Game';
+  showSaveNameModal(defaultName, (name) => {
     saveToStorage(name, game);
     showHint(`Saved as "${name}".`);
   });
@@ -343,15 +425,29 @@ function handleLoad() {
 function handleSetTitle() {
   showTitleModal(game.meta.title ?? ['', ''], (title) => {
     game.meta.title = title;
+    render();
   });
 }
 
 function handleExport() {
-  exportToFile(game);
+  if (!game.rounds.length) return;
+  const lines = game.rounds.map(round => {
+    const json = gameToTenhouJSON({ ...game, rounds: [round] });
+    return 'https://tenhou.net/5/#json=' + json;
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `paifu_${Date.now()}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function handleTenhouView() {
-  const json = gameToTenhouJSON(game);
+  const round = viewingRound();
+  if (!round) return;
+  const json = gameToTenhouJSON({ ...game, rounds: [round] });
   window.open('https://tenhou.net/5/#json=' + encodeURIComponent(json), '_blank');
 }
 

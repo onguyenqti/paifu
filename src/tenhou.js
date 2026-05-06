@@ -54,33 +54,44 @@ function resultToLog(result) {
   switch (result.type) {
     case 'tsumo': {
       const w = result.winner;
-      return ['和了', [...combined, 0], [w, w, w, pointText(result)]];
+      const yakuStrs = (result.winners?.[0]?.yaku ?? []).map(y => `${y.name}(${y.han >= 13 ? '役満' : y.han + '飜'})`);
+      return ['和了', [...combined], [w, w, w, pointText(result), ...yakuStrs]];
     }
     case 'ron': {
       const loser   = result.loser ?? -1;
       const winners = result.winners?.length ? result.winners : [{ player: result.winner }];
       const parts   = [];
-      for (const { player: w } of winners) {
+      for (const winner of winners) {
+        const w        = winner.player;
         const gain     = combined[w] ?? 0;
         const perDelta = combined.map((_, i) => i === w ? gain : i === loser ? -gain : 0);
-        parts.push([...perDelta, 0], [w, loser, w, `${gain}点`]);
+        const yakuStrs = (winner.yaku ?? []).map(y => `${y.name}(${y.han >= 13 ? '役満' : y.han + '飜'})`);
+        parts.push([...perDelta], [w, loser, w, `${gain}点`, ...yakuStrs]);
       }
       return ['和了', ...parts];
     }
     case 'draw_exhausted':
     case 'exhausted':
-      return ['流局', [...combined, 0]];
+      return ['流局', [...combined]];
     default:
       return ['不明'];
   }
 }
 
+// Parse a yaku string like "一盃口(1飜)" or "国士無双(役満)" → { name, han }.
+function parseYakuStr(s) {
+  if (typeof s !== 'string') return null;
+  const m = s.match(/^(.+)\((\d+飜|役満)\)$/);
+  if (!m) return null;
+  return { name: m[1], han: m[2] === '役満' ? 13 : parseInt(m[2], 10) };
+}
+
 // Convert Tenhou array format → our internal result object.
 // Handles any number of [deltas, detail] pairs after the type tag.
 // Tsumo: detail[0] === detail[1]. Ron: detail[1] is the loser.
+// Detail format: [winner, loser_or_winner, winner, point_text, yaku1, yaku2, ...]
 function resultFromLog(raw) {
-  if (!raw) return null;
-  if (!Array.isArray(raw)) return raw; // backwards-compat: old object format
+  if (!raw || !Array.isArray(raw)) return null;
 
   const type = raw[0];
 
@@ -104,7 +115,10 @@ function resultFromLog(raw) {
     return {
       type:        isTsumo ? 'tsumo' : 'ron',
       winner:      p0,
-      winners:     pairs.map(({ det }) => ({ player: det[0] })),
+      winners:     pairs.map(({ det }) => ({
+        player: det[0],
+        yaku:   det.slice(4).map(parseYakuStr).filter(Boolean),
+      })),
       loser,
       tile:        null,
       scoreDeltas: combined,

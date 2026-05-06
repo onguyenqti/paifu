@@ -165,6 +165,7 @@ export function applyAction(game, action) {
       round.result = {
         type: 'tsumo',
         winner: action.player,
+        winners: action.winners ?? [{ player: action.player, yaku: [] }],
         tile: action.tile,
         scoreDeltas: action.scoreDeltas ?? null,
         finalScores: tsumoFinal,

@@ -1,4 +1,4 @@
-import { tileToString, tileToUnicode, tileSuit, sortTiles } from './tiles.js';
+import { tileToString, tileToUnicode, tileSuit, sortTiles, parseTile, parseHand } from './tiles.js';
 import { Phase, WIND_NAMES, phasePrompt, currentRound } from './state.js';
 import { YAKU, totalHan, fuOverride, computeScoreDeltas, paymentSummary } from './scoring.js';
 
@@ -120,22 +120,28 @@ export function renderNavPanel(game, viewingIndex, onSelect, onAddHand) {
 
 // ── Round header ───────────────────────────────────────────────────────────────
 
-export function renderRoundHeader(round, { onDoraClick, editTarget } = {}) {
-  const el    = document.getElementById('round-display');
-  const honba = document.getElementById('honba-display');
-  const riichi = document.getElementById('riichi-display');
-  const dora  = document.getElementById('dora-display');
+export function renderRoundHeader(round, { onDoraClick, editTarget, title, onTitleClick } = {}) {
+  const titleEl = document.getElementById('round-title');
+  const el      = document.getElementById('round-display');
+  const riichi  = document.getElementById('riichi-display');
+  const dora    = document.getElementById('dora-display');
+
+  // Title
+  if (titleEl) {
+    const titleText = (title ?? []).filter(t => t).join(' — ');
+    titleEl.textContent = titleText;
+    titleEl.style.display = titleText ? '' : 'none';
+    titleEl.onclick = onTitleClick ?? null;
+  }
 
   if (!round) {
     el.textContent     = '—';
-    honba.textContent  = '';
     riichi.textContent = '';
     dora.innerHTML     = '';
     return;
   }
 
-  el.textContent = `${WIND_NAMES[round.roundWind] ?? 'East'} ${round.roundNum + 1}`;
-  honba.textContent  = `Honba: ${round.honba}`;
+  el.textContent = `${WIND_NAMES[round.roundWind] ?? 'East'} ${round.roundNum + 1} - ${round.honba}`;
   riichi.textContent = `Riichi sticks: ${round.riichiSticks}`;
 
   dora.innerHTML = '';
@@ -167,6 +173,52 @@ export function renderRoundHeader(round, { onDoraClick, editTarget } = {}) {
 }
 
 // ── Player hands ───────────────────────────────────────────────────────────────
+
+// Build a player's draw slot list with { type:'skip' } entries inserted where
+// other players' calls skipped this player's turn.
+function buildDrawSlotsWithSkips(round, p) {
+  // Natural slots: draws and calls by p, in global action order, with actionIdx preserved.
+  const natural = round.actions
+    .map((a, actionIdx) => ({ ...a, actionIdx }))
+    .filter(a =>
+      (a.type === 'draw' && a.player === p) ||
+      (CALL_TYPES.has(a.type) && a.callingPlayer === p)
+    );
+
+  // For each call action, check if p is skipped and splice a skip entry at the right slot.
+  for (let i = 0; i < round.actions.length; i++) {
+    const a = round.actions[i];
+    if (!CALL_TYPES.has(a.type)) continue;
+    const { calledFrom, callingPlayer } = a;
+    if (calledFrom == null || callingPlayer == null) continue;
+    if (calledFrom === p || callingPlayer === p) continue;
+
+    // p is skipped when it's strictly between calledFrom and callingPlayer in turn order.
+    const dist  = (callingPlayer - calledFrom + 4) % 4;
+    const distP = (p - calledFrom + 4) % 4;
+    if (distP <= 0 || distP >= dist) continue;
+
+    // K = caller's draw-slot index just before this call action in the global array.
+    let k = 0;
+    for (let j = 0; j < i; j++) {
+      const b = round.actions[j];
+      if ((b.type === 'draw' && b.player === callingPlayer) ||
+          (CALL_TYPES.has(b.type) && b.callingPlayer === callingPlayer)) k++;
+    }
+
+    // Find insertion point: before the k-th natural (non-skip) slot.
+    let naturalCount = 0;
+    let insertAt = natural.length;
+    for (let si = 0; si < natural.length; si++) {
+      if (natural[si].type === 'skip') continue;
+      if (naturalCount === k) { insertAt = si; break; }
+      naturalCount++;
+    }
+    natural.splice(insertAt, 0, { type: 'skip' });
+  }
+
+  return natural;
+}
 
 // onTileClick(target) where target = { player, context:'hand'|'draw'|'discard', index, actionIdx?, tile }
 // editTarget: same shape — used to highlight the tile being edited
@@ -211,7 +263,19 @@ export function renderPlayers(game, round, { onTileClick, editTarget, onEditName
 
     const scoreSpan = document.createElement('span');
     scoreSpan.className = 'player-score';
-    scoreSpan.textContent = round ? (round.scores[p] ?? 0).toLocaleString() : '—';
+    if (!round) {
+      scoreSpan.textContent = '—';
+    } else {
+      const base  = round.scores[p] ?? 0;
+      const delta = round.result?.scoreDeltas?.[p];
+      scoreSpan.textContent = base.toLocaleString();
+      if (delta != null && delta !== 0) {
+        const deltaSpan = document.createElement('span');
+        deltaSpan.className = `score-delta ${delta > 0 ? 'pos' : 'neg'}`;
+        deltaSpan.textContent = ` ${delta > 0 ? '+' : ''}${delta.toLocaleString()}`;
+        scoreSpan.appendChild(deltaSpan);
+      }
+    }
 
     header.appendChild(nameWrap);
     header.appendChild(windSpan);
@@ -261,34 +325,32 @@ export function renderPlayers(game, round, { onTileClick, editTarget, onEditName
     startRow.appendChild(startList);
     pane.appendChild(startRow);
 
-    // 2+3. Turns — draw slot (wall draw or call) above the matching discard
-    // drawSlotActions interleaves actual draws and calls in turn order for this player.
-    const drawSlotActions = round.actions
-      .map((a, actionIdx) => ({ ...a, actionIdx }))
-      .filter(a =>
-        (a.type === 'draw' && a.player === p) ||
-        (CALL_TYPES.has(a.type) && a.callingPlayer === p)
-      );
+    // 2+3. Turns — draw slot (wall draw, call, or skip) above the matching discard.
+    // virtualSlots includes { type:'skip' } entries for turns skipped due to calls.
+    const virtualSlots = buildDrawSlotsWithSkips(round, p);
     const discardActions = round.actions
       .map((a, actionIdx) => ({ ...a, actionIdx }))
       .filter(a => (a.type === 'discard' || a.type === 'call_discard' || a.type === 'riichi') && a.player === p);
 
-    // Track draw-only index within drawSlotActions for edit-target matching.
+    // Map virtual slot index → draw-only index (for edit-target context).
     let drawOnlyCount = 0;
-    const drawOnlyIdxMap = drawSlotActions.map(a => a.type === 'draw' ? drawOnlyCount++ : -1);
+    const drawOnlyIdxMap = virtualSlots.map(a => a.type === 'draw' ? drawOnlyCount++ : -1);
 
     const turnsRow = makeRow('Turns:', 'turns-row');
     const turnsGrid = document.createElement('div');
     turnsGrid.className = 'turns-grid';
 
-    const colCount = Math.max(drawSlotActions.length, hand.discards.length);
+    const colCount = virtualSlots.length;
+    let discardCursor = 0; // index into hand.discards; advances for non-skip columns only
     for (let i = 0; i < colCount; i++) {
       const col = document.createElement('div');
       col.className = 'turn-col';
 
-      // Draw slot cell: tile for a wall draw, badge for a call
-      const a = drawSlotActions[i];
-      const drawOnlyIdx = drawOnlyIdxMap[i] ?? -1;
+      const a          = virtualSlots[i];
+      const isSkip     = a?.type === 'skip';
+      const drawOnlyIdx = drawOnlyIdxMap[i];
+
+      // ── Draw slot ──
       if (a?.type === 'draw') {
         const tOpts = { small: true };
         if (onTileClick) tOpts.onClick = () => onTileClick({
@@ -299,35 +361,47 @@ export function renderPlayers(game, round, { onTileClick, editTarget, onEditName
         col.appendChild(tileEl(a.tile, tOpts));
       } else if (a && CALL_TYPES.has(a.type)) {
         const calledTile = a.calledTile ?? a.tiles?.[0];
-        if (calledTile != null) {
-          col.appendChild(tileEl(calledTile, { small: true, labelText: CALL_LABELS[a.type] }));
-        } else {
-          const badge = document.createElement('div');
-          badge.className = 'call-badge';
-          badge.textContent = CALL_LABELS[a.type] ?? a.type;
-          col.appendChild(badge);
-        }
+        const wrap = document.createElement('div');
+        wrap.className = 'call-draw-wrap';
+        const lbl = document.createElement('span');
+        lbl.className = 'call-type-label';
+        lbl.textContent = CALL_LABELS[a.type] ?? a.type;
+        wrap.appendChild(lbl);
+        if (calledTile != null) wrap.appendChild(tileEl(calledTile, { small: true }));
+        col.appendChild(wrap);
+      } else if (isSkip) {
+        const ph = document.createElement('div');
+        ph.className = 'tile tile-sm tile-skip';
+        ph.title = 'Turn skipped (call)';
+        ph.textContent = '—';
+        col.appendChild(ph);
       } else {
         const ph = document.createElement('div');
         ph.className = 'tile tile-sm tile-placeholder';
         col.appendChild(ph);
       }
 
-      // Discard cell
-      if (i < hand.discards.length) {
-        const t = hand.discards[i];
-        const isTsumo = discardActions[i]?.tsumogiri ?? false;
-        const isEditing = editTarget?.player === p && editTarget?.context === 'discard' && editTarget?.index === i;
+      // ── Discard slot ──
+      if (isSkip) {
+        // Skipped turns have no discard.
+        const ph = document.createElement('div');
+        ph.className = 'tile tile-sm tile-placeholder';
+        col.appendChild(ph);
+      } else if (discardCursor < hand.discards.length) {
+        const di       = discardCursor++; // capture before increment
+        const t        = hand.discards[di];
+        const isTsumo  = discardActions[di]?.tsumogiri ?? false;
+        const isEditing = editTarget?.player === p && editTarget?.context === 'discard' && editTarget?.index === di;
         if (isTsumo) {
           const el = document.createElement('div');
           el.className = 'tile tile-sm tsumogiri' + (isEditing ? ' editing' : '') + (onTileClick ? ' clickable' : '');
           el.title = tileToString(t);
           el.textContent = '↓';
-          if (onTileClick) el.addEventListener('click', () => onTileClick({ player: p, context: 'discard', index: i, tile: t }));
+          if (onTileClick) el.addEventListener('click', () => onTileClick({ player: p, context: 'discard', index: di, tile: t }));
           col.appendChild(el);
         } else {
           const tOpts = { small: true };
-          if (onTileClick) tOpts.onClick = () => onTileClick({ player: p, context: 'discard', index: i, tile: t });
+          if (onTileClick) tOpts.onClick = () => onTileClick({ player: p, context: 'discard', index: di, tile: t });
           if (isEditing) tOpts.editing = true;
           col.appendChild(tileEl(t, tOpts));
         }
@@ -620,26 +694,114 @@ export function showCallModal(game, callType, onConfirm, onCancel) {
   });
 }
 
-export function showSaveNameModal(onConfirm) {
+export function showDiscardEditCallModal({ tile, discarder, playerNames }, onConfirm) {
+  const overlay = document.getElementById('modal-overlay');
+  const content = document.getElementById('modal-content');
+  const tileName = tileToString(tile);
+  const chiCaller = (discarder + 1) % 4;
+  const others    = [0, 1, 2, 3].filter(p => p !== discarder);
+
+  function show(html) {
+    content.innerHTML = html;
+    content.style.maxWidth = '420px';
+    overlay.classList.remove('hidden');
+  }
+
+  function step1() {
+    show(`
+      <h2>Was ${tileName} called?</h2>
+      <p>Discarded by ${playerNames[discarder]}</p>
+      <div class="modal-buttons">
+        <button id="ec-none">No Call</button>
+        <button id="ec-chi">Chi</button>
+        <button id="ec-pon">Pon</button>
+        <button id="ec-kan">Kan</button>
+      </div>
+    `);
+    document.getElementById('ec-none').addEventListener('click', () => {
+      overlay.classList.add('hidden');
+      onConfirm(null);
+    });
+    document.getElementById('ec-chi').addEventListener('click', stepChi);
+    document.getElementById('ec-pon').addEventListener('click', () => stepPlayer('pon'));
+    document.getElementById('ec-kan').addEventListener('click', () => stepPlayer('kan'));
+  }
+
+  function stepChi() {
+    show(`
+      <h2>Chi by ${playerNames[chiCaller]}</h2>
+      <p>Other 2 tiles in the chi (not including <strong>${tileName}</strong>):</p>
+      <input id="chi-tiles" type="text" class="tile-input" placeholder="e.g. 2m 4m" autocomplete="off">
+      <div id="chi-err" class="hint" style="min-height:1.2em"></div>
+      <div class="modal-buttons">
+        <button id="chi-back">Back</button>
+        <button id="chi-ok">Confirm Chi</button>
+      </div>
+    `);
+    const input = document.getElementById('chi-tiles');
+    input.focus();
+    document.getElementById('chi-back').addEventListener('click', step1);
+
+    function confirmChi() {
+      const handTiles = parseHand(input.value);
+      if (handTiles.length !== 2) {
+        document.getElementById('chi-err').textContent = 'Enter exactly 2 tiles.';
+        return;
+      }
+      const allTiles = [...handTiles, tile].sort((a, b) => a - b);
+      overlay.classList.add('hidden');
+      onConfirm({ callType: 'chi', callingPlayer: chiCaller, tiles: allTiles, fromHand: handTiles, calledTile: tile });
+    }
+    document.getElementById('chi-ok').addEventListener('click', confirmChi);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') confirmChi(); });
+  }
+
+  function stepPlayer(callType) {
+    const label = callType === 'pon' ? 'Pon' : 'Kan';
+    show(`
+      <h2>${label} called by:</h2>
+      <div class="modal-buttons">
+        ${others.map(p => `<button data-p="${p}">${playerNames[p]}</button>`).join('')}
+      </div>
+      <div class="modal-buttons"><button id="player-back">Back</button></div>
+    `);
+    document.getElementById('player-back').addEventListener('click', step1);
+    content.querySelectorAll('[data-p]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p        = +btn.dataset.p;
+        const fromHand = Array(callType === 'pon' ? 2 : 3).fill(tile);
+        const allTiles = Array(callType === 'pon' ? 3 : 4).fill(tile);
+        overlay.classList.add('hidden');
+        onConfirm({ callType, callingPlayer: p, tiles: allTiles, fromHand, calledTile: tile });
+      });
+    });
+  }
+
+  step1();
+}
+
+export function showSaveNameModal(defaultName, onConfirm) {
   const overlay = document.getElementById('modal-overlay');
   const content = document.getElementById('modal-content');
   content.innerHTML = `
     <h2>Save Game</h2>
-    <input id="save-name-input" type="text" placeholder="Save name" style="width:100%">
+    <input id="save-name-input" type="text" value="${defaultName ?? ''}" placeholder="Save name" style="width:100%">
     <div class="modal-buttons" style="margin-top:12px">
       <button id="modal-confirm">Save</button>
       <button id="modal-cancel">Cancel</button>
     </div>
   `;
   overlay.classList.remove('hidden');
-  document.getElementById('save-name-input').focus();
-  document.getElementById('modal-confirm').addEventListener('click', () => {
-    const name = document.getElementById('save-name-input').value.trim();
+  const input = document.getElementById('save-name-input');
+  input.focus();
+  input.select();
+  const doConfirm = () => {
+    const name = input.value.trim();
     if (name) { overlay.classList.add('hidden'); onConfirm(name); }
-  });
-  document.getElementById('modal-cancel').addEventListener('click', () => {
-    overlay.classList.add('hidden');
-  });
+  };
+  document.getElementById('modal-confirm').addEventListener('click', doConfirm);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') doConfirm(); });
+  document.getElementById('modal-cancel').addEventListener('click', () => overlay.classList.add('hidden'));
 }
 
 export function showRoundSetupModal(game, onConfirm) {
@@ -1036,12 +1198,19 @@ export function showWinScoringModal(opts, onConfirm, onCancel) {
     const selectedWinners = candidates.filter(p => winnerState[p].selected);
     if (!selectedWinners.length) return;
 
-    const winners = selectedWinners.map(p => ({
-      player: p,
-      han:  effectiveHan(p),
-      fu:   effectiveFu(p),
-      yaku: [...winnerState[p].selectedYaku],
-    }));
+    const winners = selectedWinners.map(p => {
+      const ws = winnerState[p];
+      return {
+        player: p,
+        han:  effectiveHan(p),
+        fu:   effectiveFu(p),
+        yaku: [...ws.selectedYaku].map(id => {
+          const y = YAKU.find(y => y.id === id);
+          if (!y) return null;
+          return { name: y.jp ?? y.name, han: ws.isOpen ? (y.hanOpen ?? y.han) : y.han };
+        }).filter(Boolean),
+      };
+    });
 
     overlay.classList.add('hidden');
     onConfirm({ winners, scoreDeltas: summaryEl._deltas ?? [0,0,0,0] });

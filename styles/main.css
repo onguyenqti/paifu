@@ -226,6 +226,16 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   flex-wrap: wrap;
 }
 
+.round-title {
+  font-size: 13px;
+  color: var(--text-1);
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.round-title:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
 .round-name {
   font-size: 16px;
   font-weight: 700;
@@ -367,6 +377,32 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   text-align: center;
   line-height: 1.2;
 }
+
+/* Call type label (Chi/Pon/Kan) above the called tile in the draw slot */
+.call-draw-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.call-type-label {
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--yellow);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+/* Skip indicator for turns skipped due to a call */
+.tile.tile-skip {
+  background: transparent;
+  border: 1.5px dashed var(--bg-3);
+  box-shadow: none;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: default;
+}
+.tile.tile-skip:hover { transform: none; }
 
 /* ── Tiles ─────────────────────────────────────────────────────────────────── */
 .tile-list { display: inline-flex; flex-wrap: wrap; gap: 2px; }
