@@ -227,13 +227,17 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 }
 
 .round-title {
-  font-size: 13px;
-  color: var(--text-1);
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-0);
   cursor: pointer;
   border-bottom: 1px dashed transparent;
   transition: color .15s, border-color .15s;
   white-space: nowrap;
+  padding: 2px 0;
 }
+.round-title:empty { display: none; }
 .round-title:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 .round-name {
@@ -243,6 +247,17 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 }
 
 .round-meta { color: var(--text-1); }
+
+.dora-add-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-radius: var(--radius-sm);
+  align-self: center;
+}
+.dora-add-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .dora-row {
   display: flex;
@@ -300,9 +315,10 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   align-items: flex-start;
 }
 .turn-col {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-rows: 56px 56px;
+  row-gap: 2px;
+  align-items: end;
 }
 
 .riichi-badge {
@@ -549,20 +565,106 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .action-log {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 16px;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
-.log-line { padding: 2px 0; border-bottom: 1px solid var(--bg-2); }
+/* ── Action log items ──────────────────────────────────────────────────────── */
+.log-item {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--bg-2);
+  cursor: pointer;
+  transition: background .1s;
+}
+.log-item:hover { background: var(--bg-2); }
+.log-item.selected {
+  background: var(--bg-3);
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+}
 
-.log-draw    { color: var(--text-0); }
-.log-discard { color: var(--text-1); }
-.log-riichi  { color: var(--purple); font-weight: 600; }
-.log-call    { color: var(--yellow); }
-.log-win     { color: var(--green);  font-weight: 700; }
-.log-pass    { color: var(--text-2); font-style: italic; }
-.log-dora    { color: var(--accent); }
+.log-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+}
+.log-item-text b  { color: var(--text-0); }
+.log-item-text em { font-style: normal; color: var(--accent); }
+
+.log-item-btns {
+  display: flex;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity .1s;
+  flex-shrink: 0;
+}
+.log-item:hover .log-item-btns { opacity: 1; }
+
+.log-del-btn,
+.log-del-after-btn {
+  padding: 1px 5px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-2);
+  border-radius: var(--radius-sm);
+  line-height: 1.4;
+}
+.log-del-btn:hover       { border-color: var(--red);    color: var(--red); }
+.log-del-after-btn:hover { border-color: var(--yellow); color: var(--yellow); }
+
+.log-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.log-tag.riichi    { background: #bc8cff30; color: var(--purple); }
+.log-tag.riichi-ok { background: #3fb95030; color: var(--green); }
+.log-tag.win       { background: #3fb95030; color: var(--green); }
+.log-tag.draw      { background: var(--bg-3); color: var(--text-2); }
+
+/* riichi discard — slight purple tint on the tile */
+.tile.riichi-discard { border-color: var(--purple); box-shadow: 0 0 0 1px var(--purple), 1px 2px 3px var(--tile-shadow); }
+
+/* tsumogiri arrow below the discard tile in the turns grid */
+.tsumogiri-arrow {
+  display: block;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-2);
+}
+
+/* tsumogiri badge in action log */
+.log-tag.tsumogiri { background: transparent; color: var(--text-2); padding: 0 2px; }
+
+/* selected-action highlight on call-draw-wrap (non-tile draw slots) */
+.call-draw-wrap.selected-action {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* active toggle state (Riichi button when mode is on) */
+button.active-toggle {
+  background: #bc8cff30;
+  border-color: var(--purple);
+  color: var(--purple);
+}
+
+/* score delta in player header */
+.score-delta { font-variant-numeric: tabular-nums; }
+.score-delta.pos { color: var(--green); }
+.score-delta.neg { color: var(--red); }
 
 /* ── Key reference ─────────────────────────────────────────────────────────── */
 .tile-key {

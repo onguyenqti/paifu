@@ -1,281 +1,230 @@
-// Game state machine for mahjong paifu recording
-
 export const Phase = {
-  SETUP:         'SETUP',         // Input player names + dora
-  DEAL:          'DEAL',          // Input starting hands (one player at a time)
-  DRAW:          'DRAW',          // Current player draws a tile
-  DISCARD:       'DISCARD',       // Current player discards (or declares tsumo)
-  CALL_WINDOW:   'CALL_WINDOW',   // After discard: other players may call
-  CALL_DISCARD:  'CALL_DISCARD',  // After a call: caller must discard
-  COMPLETE:      'COMPLETE',      // Hand finished
+  DEAL:         'DEAL',
+  DRAW:         'DRAW',
+  DISCARD:      'DISCARD',
+  CALL_WINDOW:  'CALL_WINDOW',
+  CALL_DISCARD: 'CALL_DISCARD',
+  CHANKAN:      'CHANKAN',
+  COMPLETE:     'COMPLETE',
 };
 
-export const WIND_NAMES   = ['East', 'South', 'West', 'North'];
-export const PLAYER_WINDS = ['East', 'South', 'West', 'North']; // seat winds
+export const WIND_NAMES  = ['East', 'South', 'West', 'North'];
+export const CALL_TYPES  = new Set(['chi', 'pon', 'kan', 'kakan', 'ankan']);
+export const CALL_LABELS = { chi: 'Chi', pon: 'Pon', kan: 'Kan', kakan: 'Kan+', ankan: 'Ankan' };
 
 export function createGame(playerNames = ['Player 1', 'Player 2', 'Player 3', 'Player 4']) {
   return {
-    meta: {
-      players: [...playerNames],
-      title: ['', ''],
-      rules: { rounds: 'east-south', basePoints: 25000 },
-    },
+    meta: { players: [...playerNames], title: ['', ''], rules: { rounds: 'east-south', basePoints: 25000 } },
     rounds: [],
-    phase: Phase.SETUP,
-    setupStep: 0, // 0=awaiting player names, 1=all set
   };
 }
 
-function emptyHand() {
-  return { startingTiles: [], tiles: [], melds: [], discards: [], inRiichi: false, riichiTurn: -1 };
-}
-
-export function startRound(game, { dealer, honba, riichiSticks, scores, doraIndicator }) {
-  const round = {
+export function createRound({ dealer = 0, honba = 0, riichiSticks = 0, scores, doraIndicator } = {}) {
+  return {
     dealer,
-    honba:        honba        ?? 0,
-    riichiSticks: riichiSticks ?? 0,
-    roundWind: Math.floor(game.rounds.length / 4),
-    roundNum:  game.rounds.length % 4,          // 0-3 within the wind
-    scores: scores ? [...scores] : Array(4).fill(game.meta.rules.basePoints),
-    doraIndicators:    doraIndicator ? [doraIndicator] : [],
-    uraDoraIndicators: [],
-    hands: [emptyHand(), emptyHand(), emptyHand(), emptyHand()],
-    actions: [],
-    result: null,
-    // transient during data entry
-    _dealStep: 0,        // which player's hand we're filling (0-3)
-    _currentPlayer: dealer,
-    _callWindowPlayer: null, // who just discarded
-    _callingPlayer: null,    // who is making a call
+    honba,
+    initialRiichiSticks: riichiSticks,
+    initialScores:       scores ?? [25000, 25000, 25000, 25000],
+    doraIndicators:      doraIndicator != null ? [doraIndicator] : [],
+    uraDoraIndicators:   [],
+    actions:             [],
   };
-  game.rounds.push(round);
-  game.phase = Phase.DEAL;
 }
 
-export function currentRound(game) {
-  return game.rounds[game.rounds.length - 1] ?? null;
+// Derive full game state from round.actions[0..upToIdx] inclusive.
+// upToIdx = Infinity means apply all actions.
+export function computeRoundState(round, upToIdx = Infinity) {
+  const hands = Array.from({ length: 4 }, () => ({
+    startingTiles: [], tiles: [], melds: [], discards: [],
+    inRiichi: false, riichiTurn: -1,
+  }));
+  const state = {
+    hands,
+    scores:            [...(round.initialScores        ?? [25000, 25000, 25000, 25000])],
+    riichiSticks:      round.initialRiichiSticks        ?? 0,
+    doraIndicators:    [...(round.doraIndicators ?? round.initialDoraIndicators ?? [])],
+    uraDoraIndicators: [...(round.uraDoraIndicators ?? [])],
+    dealer:            round.dealer ?? 0,
+    currentPlayer:     round.dealer ?? 0,
+    callWindowPlayer:  null,
+    lastRiichiPlayer:  null,
+    phase:             Phase.DEAL,
+    dealStep:          0,
+    result:            null,
+  };
+
+  const limit = Math.min(upToIdx + 1, round.actions.length);
+  for (let i = 0; i < limit; i++) _apply(state, round.actions[i]);
+  return state;
 }
 
-// Apply a validated action to the current round and advance the phase.
-// Returns the updated game (mutated in place for simplicity).
-export function applyAction(game, action) {
-  const round = currentRound(game);
-  if (!round) return game;
+function _apply(st, a) {
+  const h = st.hands;
+  switch (a.type) {
+    case 'deal':
+      h[a.player].startingTiles = [...a.tiles];
+      h[a.player].tiles         = [...a.tiles];
+      st.dealStep++;
+      if (st.dealStep >= 4) { st.phase = Phase.DRAW; st.currentPlayer = st.dealer; }
+      break;
 
-  const hand = round.hands[action.player];
-  round.actions.push({ ...action });
+    case 'draw':
+      h[a.player].tiles.push(a.tile);
+      st.currentPlayer = a.player;
+      st.phase = Phase.DISCARD;
+      break;
 
-  switch (action.type) {
-    case 'draw': {
-      hand.tiles.push(action.tile);
-      game.phase = Phase.DISCARD;
+    case 'discard':
+    case 'call_discard': {
+      const hd = h[a.player];
+      const ix = hd.tiles.lastIndexOf(a.tile);
+      if (ix !== -1) hd.tiles.splice(ix, 1);
+      hd.discards.push(a.tile);
+      if (a.riichi) { hd.inRiichi = true; hd.riichiTurn = hd.discards.length - 1; st.lastRiichiPlayer = a.player; }
+      st.callWindowPlayer = a.player;
+      st.phase = Phase.CALL_WINDOW;
       break;
     }
 
-    case 'discard': {
-      const idx = hand.tiles.lastIndexOf(action.tile);
-      if (idx !== -1) hand.tiles.splice(idx, 1);
-      hand.discards.push(action.tile);
-      round._callWindowPlayer = action.player;
-      game.phase = Phase.CALL_WINDOW;
+    // Legacy action type kept for imported games
+    case 'riichi':
+      _apply(st, { ...a, type: 'discard', riichi: true });
+      break;
+
+    case 'riichi_complete': {
+      const p = a.player ?? st.lastRiichiPlayer;
+      if (p != null) { st.riichiSticks++; st.scores[p] -= 1000; }
+      st.currentPlayer     = ((st.callWindowPlayer ?? 0) + 1) % 4;
+      st.callWindowPlayer  = null;
+      st.lastRiichiPlayer  = null;
+      st.phase = Phase.DRAW;
       break;
     }
 
-    case 'pass': {
-      // No calls; advance to next player
-      const next = (round._callWindowPlayer + 1) % 4;
-      round._currentPlayer = next;
-      round._callWindowPlayer = null;
-      game.phase = Phase.DRAW;
+    case 'pass':
+      // After chankan, the kakan caller draws rinshan (same player); elsewhere next player draws
+      st.currentPlayer    = st.phase === Phase.CHANKAN
+        ? (st.callWindowPlayer ?? st.currentPlayer)
+        : ((st.callWindowPlayer ?? 0) + 1) % 4;
+      st.callWindowPlayer = null;
+      st.phase = Phase.DRAW;
       break;
-    }
 
     case 'chi':
     case 'pon': {
-      // fromHand: tiles removed from caller's hand
-      const caller = round.hands[action.callingPlayer];
-      for (const t of action.fromHand) {
-        const i = caller.tiles.lastIndexOf(t);
-        if (i !== -1) caller.tiles.splice(i, 1);
+      const caller = h[a.callingPlayer];
+      for (const t of (a.fromHand ?? [])) { const i = caller.tiles.lastIndexOf(t); if (i !== -1) caller.tiles.splice(i, 1); }
+      caller.melds.push({ type: a.type, tiles: a.tiles, calledFrom: a.calledFrom, calledTile: a.calledTile });
+      st.currentPlayer = a.callingPlayer; st.callWindowPlayer = null; st.lastRiichiPlayer = null;
+      st.phase = Phase.CALL_DISCARD;
+      break;
+    }
+
+    case 'kan': case 'kakan': case 'ankan': {
+      const caller = h[a.callingPlayer];
+      for (const t of (a.fromHand ?? [])) { const i = caller.tiles.lastIndexOf(t); if (i !== -1) caller.tiles.splice(i, 1); }
+      if (a.type === 'kakan') {
+        // Extend the existing pon meld in place rather than adding a duplicate
+        const tile = a.calledTile ?? a.tiles?.[0];
+        const ponIdx = caller.melds.findIndex(m => m.type === 'pon' && (m.calledTile ?? m.tiles?.[0]) === tile);
+        if (ponIdx !== -1) {
+          caller.melds[ponIdx] = { ...caller.melds[ponIdx], type: 'kakan', tiles: a.tiles };
+        } else {
+          caller.melds.push({ type: 'kakan', tiles: a.tiles, calledFrom: a.calledFrom, calledTile: a.calledTile });
+        }
+      } else {
+        caller.melds.push({ type: a.type, kanType: a.kanType, tiles: a.tiles, calledFrom: a.calledFrom, calledTile: a.calledTile });
       }
-      caller.melds.push({
-        type: action.type,
-        tiles: action.tiles, // full set including called tile
-        calledFrom: action.calledFrom,
-        calledTile: action.calledTile,
-      });
-      round._currentPlayer = action.callingPlayer;
-      round._callingPlayer = null;
-      round._callWindowPlayer = null;
-      game.phase = Phase.CALL_DISCARD;
-      break;
-    }
-
-    case 'kan': {
-      const caller = round.hands[action.callingPlayer];
-      for (const t of action.fromHand) {
-        const i = caller.tiles.lastIndexOf(t);
-        if (i !== -1) caller.tiles.splice(i, 1);
+      if (a.newDora) st.doraIndicators.push(a.newDora);
+      st.currentPlayer = a.callingPlayer; st.lastRiichiPlayer = null;
+      if (a.type === 'kakan') {
+        st.callWindowPlayer = a.callingPlayer;
+        st.phase = Phase.CHANKAN;
+      } else {
+        st.callWindowPlayer = null;
+        st.phase = Phase.DRAW;
       }
-      caller.melds.push({
-        type: 'kan',
-        kanType: action.kanType,
-        tiles: action.tiles,
-        calledFrom: action.calledFrom,
-        calledTile: action.calledTile,
-      });
-      if (action.newDora) round.doraIndicators.push(action.newDora);
-      // After kan the calling player draws a rinshan tile (goes back to DRAW)
-      round._currentPlayer = action.callingPlayer;
-      round._callingPlayer = null;
-      round._callWindowPlayer = null;
-      game.phase = Phase.DRAW;
       break;
     }
 
-    case 'call_discard': {
-      // Alias for a discard that happens after a call
-      const idx = hand.tiles.lastIndexOf(action.tile);
-      if (idx !== -1) hand.tiles.splice(idx, 1);
-      hand.discards.push(action.tile);
-      round._callWindowPlayer = action.player;
-      game.phase = Phase.CALL_WINDOW;
+    case 'tsumo':
+      if (a.scoreDeltas) for (let p = 0; p < 4; p++) st.scores[p] += a.scoreDeltas[p];
+      st.result = { type: 'tsumo', winner: a.player, winners: a.winners ?? [{ player: a.player, yaku: [] }], tile: a.tile, scoreDeltas: a.scoreDeltas ?? null };
+      st.phase = Phase.COMPLETE;
       break;
-    }
 
-    case 'riichi': {
-      hand.inRiichi = true;
-      hand.riichiTurn = round.actions.length - 1;
-      round.riichiSticks = (round.riichiSticks || 0) + 1;
-      // Mark the tile as riichi discard
-      const ridx = hand.tiles.lastIndexOf(action.tile);
-      if (ridx !== -1) hand.tiles.splice(ridx, 1);
-      hand.discards.push(action.tile);
-      round._callWindowPlayer = action.player;
-      game.phase = Phase.CALL_WINDOW;
+    case 'ron':
+      if (a.scoreDeltas) for (let p = 0; p < 4; p++) st.scores[p] += a.scoreDeltas[p];
+      st.result = { type: 'ron', winner: a.winner, winners: a.winners ?? [{ player: a.winner }], loser: a.loser, tile: a.tile, scoreDeltas: a.scoreDeltas ?? null };
+      st.phase = Phase.COMPLETE;
       break;
-    }
 
-    case 'tsumo': {
-      hand.tiles.push(action.tile);
-      const tsumoFinal = action.scoreDeltas
-        ? round.scores.map((s, i) => s + action.scoreDeltas[i])
-        : [...round.scores];
-      round.result = {
-        type: 'tsumo',
-        winner: action.player,
-        winners: action.winners ?? [{ player: action.player, yaku: [] }],
-        tile: action.tile,
-        scoreDeltas: action.scoreDeltas ?? null,
-        finalScores: tsumoFinal,
-      };
-      game.phase = Phase.COMPLETE;
+    case 'draw_exhausted':
+      if (a.scoreDeltas) for (let p = 0; p < 4; p++) st.scores[p] += a.scoreDeltas[p];
+      st.result = { type: 'draw_exhausted', scoreDeltas: a.scoreDeltas ?? null };
+      st.phase = Phase.COMPLETE;
       break;
-    }
 
-    case 'ron': {
-      const ronFinal = action.scoreDeltas
-        ? round.scores.map((s, i) => s + action.scoreDeltas[i])
-        : [...round.scores];
-      round.result = {
-        type: 'ron',
-        winner: action.winner,
-        winners: action.winners ?? [{ player: action.winner }],
-        loser: action.loser,
-        tile: action.tile,
-        scoreDeltas: action.scoreDeltas ?? null,
-        finalScores: ronFinal,
-      };
-      game.phase = Phase.COMPLETE;
-      break;
-    }
-
-    case 'draw_exhausted': {
-      round.result = { type: 'draw' };
-      game.phase = Phase.COMPLETE;
-      break;
-    }
-
-    case 'add_dora': {
-      round.doraIndicators.push(action.tile);
-      break;
-    }
-
-    case 'add_ura_dora': {
-      round.uraDoraIndicators.push(action.tile);
-      break;
-    }
+    case 'add_dora':     st.doraIndicators.push(a.tile);    break;
+    case 'add_ura_dora': st.uraDoraIndicators.push(a.tile); break;
   }
-
-  return game;
 }
 
-export function phasePrompt(game) {
-  const round = currentRound(game);
-  switch (game.phase) {
-    case Phase.SETUP:
-      return {
-        label: 'No game in progress',
-        hint: 'Click "New Game" to start recording a hand.',
-        expects: 'none',
-      };
-    case Phase.DEAL: {
-      const pIdx = round._dealStep;
-      return {
-        label: `Dealing — ${game.meta.players[pIdx]}'s hand`,
-        hint: `Enter 13 tiles for ${game.meta.players[pIdx]}. Use shorthand like 123m456p789s1234z or space-separated: 1m 2m 3p …`,
-        expects: 'hand',
-        player: pIdx,
-      };
+// Build draw/discard turn pairs for player p, up to upToIdx inclusive.
+// Each pair: { draw: { actionIdx, tile, type, label? } | null,
+//              discard: { actionIdx, tile, riichi } | null }
+export function buildTurnPairs(actions, p, upToIdx = Infinity) {
+  const limit = Math.min(upToIdx + 1, actions.length);
+  const pairs = [];
+  let pending = null;
+  for (let i = 0; i < limit; i++) {
+    const a = actions[i];
+    if (a.type === 'draw' && a.player === p) {
+      pending = { actionIdx: i, tile: a.tile, type: 'draw' };
+    } else if (CALL_TYPES.has(a.type) && a.callingPlayer === p) {
+      if (a.type === 'kakan' || a.type === 'ankan') {
+        // Self-kan: pairs with the preceding draw as draw slot, kan as discard slot
+        pairs.push({ draw: pending ?? null, discard: { actionIdx: i, tile: a.calledTile ?? a.tiles?.[0], type: a.type, label: CALL_LABELS[a.type], riichi: false, tsumogiri: false } });
+        pending = null;
+      } else if (a.type === 'kan') {
+        // Minkan: flush as its own draw-slot pair; rinshan draw follows in the next pair
+        pairs.push({ draw: { actionIdx: i, tile: a.calledTile ?? a.tiles?.[0], type: a.type, label: CALL_LABELS[a.type] }, discard: null });
+        pending = null;
+      } else {
+        pending = { actionIdx: i, tile: a.calledTile ?? a.tiles?.[0], type: a.type, label: CALL_LABELS[a.type] };
+      }
+    } else if ((a.type === 'discard' || a.type === 'call_discard' || a.type === 'riichi') && a.player === p) {
+      pairs.push({ draw: pending ?? null, discard: { actionIdx: i, tile: a.tile, riichi: !!(a.riichi || a.type === 'riichi'), tsumogiri: !!a.tsumogiri } });
+      pending = null;
     }
-    case Phase.DRAW: {
-      const p = round._currentPlayer;
-      return {
-        label: `${game.meta.players[p]}'s Draw`,
-        hint: 'Enter the drawn tile (e.g. 3m, 7p, E). Press Tsumo instead of confirming if it completes the hand.',
-        expects: 'tile',
-        player: p,
-      };
-    }
-    case Phase.DISCARD: {
-      const p = round._currentPlayer;
-      return {
-        label: `${game.meta.players[p]}'s Discard`,
-        hint: 'Enter the tile to discard. Use Riichi button before confirming if declaring riichi.',
-        expects: 'tile',
-        player: p,
-      };
-    }
+  }
+  if (pending) pairs.push({ draw: pending, discard: null });
+  return pairs;
+}
+
+export function phasePrompt(state, players) {
+  switch (state.phase) {
+    case Phase.DEAL:
+      return { label: `Deal — ${players[state.dealStep]}'s hand`, hint: `Enter 13 tiles for ${players[state.dealStep]}.`, expects: 'hand', player: state.dealStep };
+    case Phase.DRAW:
+      return { label: `${players[state.currentPlayer]}'s Draw`, hint: 'Enter the drawn tile (e.g. 3m, 7p, 1z).', expects: 'tile', player: state.currentPlayer };
+    case Phase.DISCARD:
+      return { label: `${players[state.currentPlayer]}'s Discard`, hint: 'Enter tile to discard. Toggle Riichi before confirming if declaring.', expects: 'tile', player: state.currentPlayer };
     case Phase.CALL_WINDOW: {
-      const p = round._callWindowPlayer;
-      const tile = round.hands[p].discards.at(-1);
-      return {
-        label: 'Call Window',
-        hint: `${game.meta.players[p]} discarded. Any player may call: Chi, Pon, Kan, or Ron. Press Pass to continue.`,
-        expects: 'call',
-        discardingPlayer: p,
-        discardedTile: tile,
-      };
+      const wasRiichi = state.lastRiichiPlayer != null;
+      return { label: 'Call Window', hint: `${players[state.callWindowPlayer]} discarded${wasRiichi ? ' (Riichi)' : ''}. Type next draw to pass, or use buttons to call.`, expects: 'call', discardingPlayer: state.callWindowPlayer, wasRiichi };
     }
-    case Phase.CALL_DISCARD: {
-      const p = round._currentPlayer;
-      return {
-        label: `${game.meta.players[p]}'s Discard (after call)`,
-        hint: 'Enter the tile to discard after the call.',
-        expects: 'tile',
-        player: p,
-      };
-    }
+    case Phase.CALL_DISCARD:
+      return { label: `${players[state.currentPlayer]}'s Discard`, hint: 'Discard a tile after the call.', expects: 'tile', player: state.currentPlayer };
+    case Phase.CHANKAN:
+      return { label: 'Chankan', hint: `${players[state.callWindowPlayer ?? 0]} declared Kakan. Ron to rob the kan, or enter rinshan draw to pass.`, expects: 'call', discardingPlayer: state.callWindowPlayer };
     case Phase.COMPLETE: {
-      const r = round.result;
-      let desc = '';
-      if (r.type === 'tsumo') desc = `${game.meta.players[r.winner]} wins by Tsumo!`;
-      else if (r.type === 'ron') desc = `${game.meta.players[r.winner]} wins by Ron from ${game.meta.players[r.loser]}!`;
-      else desc = 'Exhaustive Draw (Ryuukyoku)';
-      return { label: 'Hand Complete', hint: desc, expects: 'none' };
+      const r = state.result;
+      const desc = r?.type === 'tsumo' ? `${players[r.winner]} wins by Tsumo!`
+                 : r?.type === 'ron'   ? `${players[r.winner]} wins by Ron!`
+                 : 'Exhaustive Draw (Ryuukyoku)';
+      return { label: 'Round Complete', hint: desc, expects: 'none' };
     }
-    default:
-      return { label: '', hint: '', expects: 'none' };
+    default: return { label: '', hint: '', expects: 'none' };
   }
 }
