@@ -19,9 +19,11 @@ export function createGame(playerNames = ['Player 1', 'Player 2', 'Player 3', 'P
   };
 }
 
-export function createRound({ dealer = 0, honba = 0, riichiSticks = 0, scores, doraIndicator } = {}) {
+export function createRound({ dealer = 0, honba = 0, riichiSticks = 0, scores, doraIndicator, roundWind, roundNum } = {}) {
   return {
     dealer,
+    roundWind: roundWind ?? null,
+    roundNum:  roundNum  ?? null,
     honba,
     initialRiichiSticks: riichiSticks,
     initialScores:       scores ?? [25000, 25000, 25000, 25000],

@@ -6,7 +6,7 @@ import {
   renderNavPanel, renderRoundHeader, renderVisualization, renderActionLog,
   renderControls, showSaveModal, showCallModal, showSaveNameModal,
   showRoundSetupModal, showSingleNameModal, showWinScoringModal, showTitleModal,
-  showSelfKanModal, showTilePromptModal,
+  showSelfKanModal, showTilePromptModal, showDrawExhaustedModal,
 } from './ui.js';
 
 // ── App state ──────────────────────────────────────────────────────────────────
@@ -77,10 +77,12 @@ function render() {
 
   renderNavPanel(game, vIdx, onSelectRound, onAddHand);
   renderRoundHeader(vRound, state, {
-    title:        game.meta.title,
-    onTitleClick: handleSetTitle,
-    onAddDora:    vRound ? () => showTilePromptModal('Add Dora Indicator', (tile) => { (vRound.doraIndicators    ??= []).push(tile); render(); }) : null,
-    onAddUraDora: vRound ? () => showTilePromptModal('Add Ura Dora',      (tile) => { (vRound.uraDoraIndicators ??= []).push(tile); render(); }) : null,
+    title:          game.meta.title,
+    onTitleClick:   handleSetTitle,
+    onAddDora:      vRound ? () => showTilePromptModal('Add Dora Indicator', (tile) => { (vRound.doraIndicators    ??= []).push(tile); render(); }) : null,
+    onAddUraDora:   vRound ? () => showTilePromptModal('Add Ura Dora',      (tile) => { (vRound.uraDoraIndicators ??= []).push(tile); render(); }) : null,
+    onDeleteRound:       vRound ? handleDeleteRound : null,
+    onEditRiichiSticks:  vRound ? (v) => { if (v !== null) { vRound.initialRiichiSticks = v; render(); } } : null,
   });
   renderVisualization(state, vRound, game.meta.players, selectedActionIdx, selectAction);
   renderActionLog(vRound, game.meta.players, selectedActionIdx, {
@@ -100,10 +102,14 @@ function onSelectRound(i) {
 }
 
 function onAddHand() {
-  const prev = viewingRound();
+  const prev      = viewingRound();
   const prevState = prev ? computeRoundState(prev) : null;
+  const prevResult = prevState?.result;
+  const carrySticks = (prevResult?.type === 'tsumo' || prevResult?.type === 'ron')
+    ? 0
+    : (prevState?.riichiSticks ?? 0);
   showRoundSetupModal(game, (opts) => {
-    const round = createRound({ ...opts, riichiSticks: prev?.initialRiichiSticks ?? 0 });
+    const round = createRound({ ...opts, riichiSticks: carrySticks });
     game.rounds.push(round);
     viewingRoundIdx   = game.rounds.length - 1;
     selectedActionIdx = null;
@@ -216,6 +222,7 @@ function handleTsumo() {
 function handleRon() {
   const state = workingState();
   if (!state) return;
+  const round = viewingRound();
   let loser, tile;
   if (state.phase === Phase.CHANKAN) {
     loser = state.callWindowPlayer;
@@ -228,7 +235,7 @@ function handleRon() {
     return;
   }
   showWinScoringModal(
-    { isTsumo: false, tile, winner: null, loser, state, playerNames: game.meta.players, honba: viewingRound()?.honba ?? 0 },
+    { isTsumo: false, tile, winner: null, loser, state, playerNames: game.meta.players, honba: round?.honba ?? 0 },
     ({ winners, scoreDeltas }) => {
       addAction({ type: 'ron', winner: winners[0].player, winners, loser, tile, scoreDeltas });
     },
@@ -279,9 +286,9 @@ function handlePass() {
   if (state.phase !== Phase.CALL_WINDOW) return;
   if (state.lastRiichiPlayer != null) {
     addAction({ type: 'riichi_complete', player: state.lastRiichiPlayer });
+  } else {
+    addAction({ type: 'pass' });
   }
-  // Otherwise no action needed — user types next draw directly
-  render();
 }
 
 function handleExhausted() {
@@ -292,7 +299,9 @@ function handleExhausted() {
     return;
   }
   if (state.phase === Phase.DRAW || state.phase === Phase.DISCARD || state.phase === Phase.CALL_WINDOW) {
-    addAction({ type: 'draw_exhausted' });
+    showDrawExhaustedModal(game.meta.players, state.scores, ({ scoreDeltas }) => {
+      addAction({ type: 'draw_exhausted', scoreDeltas });
+    }, () => {});
   }
 }
 
@@ -360,6 +369,16 @@ function onEditName(playerIndex) {
     game.meta.players[playerIndex] = name;
     render();
   });
+}
+
+function handleDeleteRound() {
+  const idx = viewingRoundIdx ?? (game.rounds.length - 1);
+  if (idx == null || !game.rounds[idx]) return;
+  if (!confirm('Delete this round? This cannot be undone.')) return;
+  game.rounds.splice(idx, 1);
+  viewingRoundIdx   = game.rounds.length > 0 ? Math.min(idx, game.rounds.length - 1) : null;
+  selectedActionIdx = null;
+  render();
 }
 
 function handleNewGame() {

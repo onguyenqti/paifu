@@ -103,7 +103,7 @@ function computeRoundStateForNav(round) {
 
 // ── Round header ───────────────────────────────────────────────────────────────
 
-export function renderRoundHeader(round, state, { title, onTitleClick, onAddDora, onAddUraDora } = {}) {
+export function renderRoundHeader(round, state, { title, onTitleClick, onAddDora, onAddUraDora, onDeleteRound, onEditRiichiSticks } = {}) {
   const titleEl  = document.getElementById('round-title');
   const el       = document.getElementById('round-display');
   const riichiEl = document.getElementById('riichi-display');
@@ -121,10 +121,35 @@ export function renderRoundHeader(round, state, { title, onTitleClick, onAddDora
     return;
   }
 
-  const wind = round.roundWind != null ? WIND_NAMES[round.roundWind] : WIND_NAMES[Math.floor((state?.dealer ?? 0) / 4)] ?? 'East';
-  const num  = round.roundNum  != null ? round.roundNum : 0;
+  const wind = WIND_NAMES[round.roundWind ?? 0] ?? 'East';
+  const num  = round.roundNum ?? round.dealer ?? 0;
   el.textContent      = `${wind} ${num + 1} - ${round.honba}`;
-  riichiEl.textContent = `Riichi sticks: ${state?.riichiSticks ?? round.initialRiichiSticks ?? 0}`;
+  const riichiCount = state?.riichiSticks ?? round.initialRiichiSticks ?? 0;
+  riichiEl.innerHTML = '';
+  const riichiLabel = document.createElement('span');
+  riichiLabel.textContent = `Riichi sticks: ${riichiCount}`;
+  if (onEditRiichiSticks) {
+    riichiLabel.className = 'editable-label';
+    riichiLabel.title = 'Click to edit initial riichi sticks';
+    riichiLabel.addEventListener('click', () => {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.min = '0'; inp.value = round.initialRiichiSticks ?? 0;
+      inp.style.cssText = 'width:50px;padding:2px 4px;font-size:inherit';
+      const label = document.createElement('span');
+      label.textContent = 'Riichi sticks: ';
+      riichiEl.innerHTML = '';
+      riichiEl.appendChild(label);
+      riichiEl.appendChild(inp);
+      inp.focus(); inp.select();
+      const commit = () => {
+        const v = parseInt(inp.value, 10);
+        onEditRiichiSticks(isNaN(v) ? 0 : Math.max(0, v));
+      };
+      inp.addEventListener('blur', commit);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') onEditRiichiSticks(null); });
+    });
+  }
+  riichiEl.appendChild(riichiLabel);
 
   doraEl.innerHTML = '';
   const doras    = state?.doraIndicators    ?? round.doraIndicators    ?? round.initialDoraIndicators ?? [];
@@ -147,6 +172,14 @@ export function renderRoundHeader(round, state, { title, onTitleClick, onAddDora
   };
   if (onAddDora)    doraBtn('+Dora', onAddDora);
   if (onAddUraDora) doraBtn('+Ura',  onAddUraDora);
+
+  if (onDeleteRound) {
+    const btn = document.createElement('button');
+    btn.className = 'dora-add-btn delete-round-btn';
+    btn.textContent = '✕ Round';
+    btn.addEventListener('click', onDeleteRound);
+    doraEl.appendChild(btn);
+  }
 }
 
 // ── Visualization (centre column) ─────────────────────────────────────────────
@@ -481,7 +514,7 @@ export function renderControls(state, players, riichiMode, { onRiichiToggle } = 
       input.placeholder = 'Next draw (pass) or use call buttons';
       input.style.display = '';
       confirm.style.display = '';
-      show('btn-chi', 'btn-pon', 'btn-kan', 'btn-ron', 'btn-pass');
+      show('btn-chi', 'btn-pon', 'btn-kan', 'btn-ron', 'btn-pass', 'btn-exhausted');
       document.getElementById('btn-pass').textContent = prompt.wasRiichi ? 'Riichi OK' : 'Pass';
       break;
     case Phase.CALL_DISCARD:
@@ -672,16 +705,19 @@ export function showSaveNameModal(defaultName, onConfirm) {
 export function showRoundSetupModal(game, onConfirm) {
   const overlay   = document.getElementById('modal-overlay');
   const content   = document.getElementById('modal-content');
-  const prevRound = game.rounds[game.rounds.length - 1];
-  const prevState = prevRound ? (() => { try { return computeRoundState(prevRound); } catch { return null; } })() : null;
-  const defScores = prevState
-    ? prevState.scores.map(s => s.toLocaleString()).join(', ')
-    : '25000, 25000, 25000, 25000';
-  const defDealer = prevRound ? ((prevRound.dealer + 1) % 4) : 0;
-  const defHonba  = prevRound?.honba ?? 0;
+  const prevRound    = game.rounds[game.rounds.length - 1];
+  const prevState    = prevRound ? (() => { try { return computeRoundState(prevRound); } catch { return null; } })() : null;
+  const defScores    = prevState ? prevState.scores.join(', ') : '25000, 25000, 25000, 25000';
+  const defDealer    = prevRound ? ((prevRound.dealer + 1) % 4) : 0;
+  const defHonba     = prevRound?.honba ?? 0;
+  const defRoundWind = prevRound?.roundWind ?? 0;
 
   content.innerHTML = `
     <h2>Start New Round</h2>
+    <label>Wind:</label>
+    <div id="wind-selector" style="display:inline-flex;gap:4px;margin-left:8px;margin-bottom:12px">
+      ${['East','South','West','North'].map((w, i) => `<button class="wind-btn${i === defRoundWind ? ' selected' : ''}" data-wind="${i}">${w}</button>`).join('')}
+    </div><br>
     <label>Scores: <input id="scores-input" type="text" value="${defScores}" style="width:240px"></label><br><br>
     <label>Dealer (0-3): <input id="dealer-input" type="number" min="0" max="3" value="${defDealer}" style="width:60px"></label><br><br>
     <label>Honba: <input id="honba-input" type="number" min="0" value="${defHonba}" style="width:60px"></label><br><br>
@@ -693,19 +729,29 @@ export function showRoundSetupModal(game, onConfirm) {
   `;
   overlay.classList.remove('hidden');
 
+  content.querySelectorAll('.wind-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      content.querySelectorAll('.wind-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
+
   document.getElementById('modal-confirm').addEventListener('click', () => {
-    const scores = document.getElementById('scores-input').value
-      .split(',').map(s => parseInt(s.trim().replace(/,/g, ''), 10)).filter(n => !isNaN(n));
-    const dealer  = parseInt(document.getElementById('dealer-input').value, 10);
-    const honba   = parseInt(document.getElementById('honba-input').value, 10);
-    const doraStr = document.getElementById('dora-input').value.trim();
-    const dora    = doraStr ? parseTile(doraStr) : null;
+    const scores    = document.getElementById('scores-input').value
+      .split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+    const dealer    = parseInt(document.getElementById('dealer-input').value, 10);
+    const honba     = parseInt(document.getElementById('honba-input').value, 10);
+    const doraStr   = document.getElementById('dora-input').value.trim();
+    const dora      = doraStr ? parseTile(doraStr) : null;
+    const roundWind = parseInt(content.querySelector('.wind-btn.selected')?.dataset.wind ?? defRoundWind, 10);
     overlay.classList.add('hidden');
     onConfirm({
-      scores:       scores.length === 4 ? scores : null,
-      dealer:       isNaN(dealer) ? 0 : dealer % 4,
-      honba:        isNaN(honba)  ? 0 : honba,
+      scores:        scores.length === 4 ? scores : null,
+      dealer:        isNaN(dealer) ? 0 : dealer % 4,
+      honba:         isNaN(honba)  ? 0 : honba,
       doraIndicator: dora,
+      roundWind:     isNaN(roundWind) ? 0 : roundWind,
+      roundNum:      isNaN(dealer) ? 0 : dealer % 4,
     });
   });
   document.getElementById('modal-cancel').addEventListener('click', () => overlay.classList.add('hidden'));
@@ -836,6 +882,67 @@ export function showSelfKanModal(state, playerNames, onConfirm, onCancel) {
 
 // ── Win scoring modal ──────────────────────────────────────────────────────────
 
+export function showDrawExhaustedModal(playerNames, currentScores, onConfirm, onCancel) {
+  const overlay = document.getElementById('modal-overlay');
+  const content = document.getElementById('modal-content');
+  const tenpai  = new Set();
+
+  const computeDeltas = () => {
+    const n = tenpai.size;
+    if (n === 0 || n === 4) return [0, 0, 0, 0];
+    const gain = 3000 / n;
+    const loss = 3000 / (4 - n);
+    return [0, 1, 2, 3].map(p => tenpai.has(p) ? gain : -loss);
+  };
+
+  const updatePreview = () => {
+    const deltas  = computeDeltas();
+    const preview = content.querySelector('#ryuukyoku-preview');
+    const noMove  = deltas.every(d => d === 0);
+    preview.innerHTML = noMove
+      ? '<span style="color:var(--text-2)">No payment</span>'
+      : playerNames.map((name, p) => {
+          const d  = deltas[p];
+          const ns = (currentScores[p] ?? 0) + d;
+          return `<div><b>${name}</b>: <span style="color:${d > 0 ? '#4caf50' : d < 0 ? '#e57373' : 'inherit'}">${d > 0 ? '+' : ''}${d}</span> → ${ns}</div>`;
+        }).join('');
+    content.querySelectorAll('.tenpai-btn').forEach(btn =>
+      btn.classList.toggle('selected', tenpai.has(+btn.dataset.player)));
+  };
+
+  content.innerHTML = `
+    <h2>Exhaustive Draw</h2>
+    <p style="margin:0 0 8px">Tenpai players:</p>
+    <div class="modal-buttons" style="margin-top:0">
+      ${playerNames.map((name, p) => `<button class="tenpai-btn" data-player="${p}">${name}</button>`).join('')}
+    </div>
+    <div id="ryuukyoku-preview" style="margin-top:14px;font-size:13px;line-height:2"></div>
+    <div class="modal-buttons" style="margin-top:14px">
+      <button id="modal-confirm">Confirm</button>
+      <button id="modal-cancel">Cancel</button>
+    </div>
+  `;
+  overlay.classList.remove('hidden');
+
+  content.querySelectorAll('.tenpai-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = +btn.dataset.player;
+      tenpai.has(p) ? tenpai.delete(p) : tenpai.add(p);
+      updatePreview();
+    });
+  });
+  updatePreview();
+
+  document.getElementById('modal-confirm').addEventListener('click', () => {
+    overlay.classList.add('hidden');
+    onConfirm({ scoreDeltas: computeDeltas() });
+  });
+  document.getElementById('modal-cancel').addEventListener('click', () => {
+    overlay.classList.add('hidden');
+    onCancel?.();
+  });
+}
+
 export function showWinScoringModal(opts, onConfirm, onCancel) {
   const { isTsumo, tile, winner: tsumoWinner, loser, state, playerNames, honba: honbaOpt } = opts;
   const overlay   = document.getElementById('modal-overlay');
@@ -886,7 +993,7 @@ export function showWinScoringModal(opts, onConfirm, onCancel) {
   };
   const effectiveFu = (p) => {
     const ws = winnerState[p];
-    const fo = fuOverride([...ws.selectedYaku]);
+    const fo = fuOverride([...ws.selectedYaku], isTsumo);
     return fo !== null ? fo : ws.fu;
   };
 
@@ -998,7 +1105,7 @@ export function showWinScoringModal(opts, onConfirm, onCancel) {
     const row = body.querySelector('.han-fu-row');
     row.innerHTML = '';
     const yHan = totalHan([...ws.selectedYaku], ws.isOpen);
-    const fo   = fuOverride([...ws.selectedYaku]);
+    const fo   = fuOverride([...ws.selectedYaku], isTsumo);
     const total = yHan + ws.dora + ws.akaDora + ws.uraDora;
 
     const baseSpan = document.createElement('span');

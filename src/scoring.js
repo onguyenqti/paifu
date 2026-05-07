@@ -63,11 +63,13 @@ export function totalHan(selectedIds, isOpen) {
   return total;
 }
 
-// Fu override from selected yaku (chiitoitsu → 25, pinfu → 20/30)
-export function fuOverride(selectedIds) {
+// Fu override from selected yaku (chiitoitsu → 25, pinfu → 20 tsumo / 30 ron)
+export function fuOverride(selectedIds, isTsumo = true) {
   for (const id of selectedIds) {
     const y = YAKU.find(y => y.id === id);
-    if (y?.fuOverride !== undefined) return y.fuOverride;
+    if (y?.fuOverride !== undefined) {
+      return (id === 'pinfu' && !isTsumo) ? 30 : y.fuOverride;
+    }
   }
   return null;
 }
@@ -182,8 +184,12 @@ export function paymentSummary(han, fu, { winner, loser, dealer, isTsumo, honba,
       winnerGain,
     };
   } else {
-    const base = isDealer ? pay.ronDealer : pay.ronNonDealer;
-    const total = base + honba * 300;
-    return { limit, label: total.toLocaleString(), winnerGain };
+    const base        = isDealer ? pay.ronDealer : pay.ronNonDealer;
+    const honbaBonus  = honba * 300;
+    const total       = base + honbaBonus;
+    const label       = honbaBonus > 0
+      ? `${base.toLocaleString()} + ${honbaBonus.toLocaleString()} honba`
+      : total.toLocaleString();
+    return { limit, label, winnerGain };
   }
 }

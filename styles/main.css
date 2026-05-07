@@ -258,6 +258,10 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   align-self: center;
 }
 .dora-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+.editable-label { cursor: pointer; border-bottom: 1px dashed var(--text-2); }
+.editable-label:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.delete-round-btn { margin-left: auto; }
+.delete-round-btn:hover { border-color: #c0392b; color: #c0392b; }
 
 .dora-row {
   display: flex;
@@ -753,11 +757,13 @@ button.active-toggle {
   margin-top: 12px;
 }
 .modal-buttons button { padding: 7px 16px; }
-.modal-buttons button.selected {
+.modal-buttons button.selected,
+.wind-btn.selected {
   background: var(--accent-dim);
   border-color: var(--accent);
   color: #fff;
 }
+.wind-btn { padding: 5px 10px; }
 
 .save-list {
   list-style: none;

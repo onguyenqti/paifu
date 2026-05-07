@@ -114,16 +114,17 @@ function callStr(a) {
   const type  = a.type;
   if (type === 'ankan') return parts.slice(0, 3).join('') + 'a' + parts.slice(3).join('');
   if (type === 'kakan') return parts.slice(0, 1).join('') + 'm' + parts.slice(1).join('');
-  const ch = CALL_TYPE_PREFIXES[type] ?? 'c';
-  let idx;
   if (type === 'chi') {
-    const ct = a.calledTile ?? a.tiles?.[0];
-    idx = (a.tiles ?? []).indexOf(ct);
-    if (idx < 0) idx = 0;
-  } else {
-    const rel = a.calledFrom != null ? (a.calledFrom - a.callingPlayer + 4) % 4 : 3;
-    idx = Math.max(0, Math.min(rel - 1, parts.length - 1));
+    const ct    = a.calledTile ?? a.tiles?.[0];
+    const ctIdx = (a.tiles ?? []).indexOf(ct);
+    const reordered = ctIdx >= 0
+      ? [parts[ctIdx], ...parts.slice(0, ctIdx), ...parts.slice(ctIdx + 1)]
+      : parts;
+    return 'c' + reordered.join('');
   }
+  const ch  = CALL_TYPE_PREFIXES[type] ?? 'p';
+  const rel = a.calledFrom != null ? (a.calledFrom - a.callingPlayer + 4) % 4 : 3;
+  const idx = Math.max(0, Math.min(parts.length - rel, parts.length - 1));
   return parts.slice(0, idx).join('') + ch + parts.slice(idx).join('');
 }
 
@@ -209,7 +210,7 @@ function parseCallStr(s, callingPlayer) {
   const calledTile = tiles[calledTileIdx] ?? tiles[0];
   let calledFrom = null;
   if (type === 'chi') calledFrom = (callingPlayer + 3) % 4;
-  else if (type === 'pon' || type === 'kan') calledFrom = (callingPlayer + calledTileIdx + 1) % 4;
+  else if (type === 'pon' || type === 'kan') calledFrom = (callingPlayer + tiles.length - calledTileIdx) % 4;
   return { type, tiles, calledTile, calledTileIdx, calledFrom };
 }
 
@@ -222,14 +223,15 @@ function buildRoundActions(players, dealer) {
   let cur = dealer;
 
   // After emitting a discard, find which player acts next:
-  // the first other player whose next draw entry is a call string (chi/pon/minkan).
-  const nextAfterDiscard = () => {
+  // the first other player whose next draw entry is a call string (chi/pon/minkan)
+  // whose calledTile matches the tile just discarded.
+  const nextAfterDiscard = (discardedTile) => {
     for (let rel = 1; rel <= 3; rel++) {
       const cp  = (cur + rel) % 4;
       const nxt = players[cp].rawDraws[cursor[cp]];
       if (typeof nxt === 'string') {
         const nc = parseCallStr(nxt, cp);
-        if (nc && nc.type !== 'ankan' && nc.type !== 'kakan') return cp;
+        if (nc && nc.type !== 'ankan' && nc.type !== 'kakan' && nc.calledTile === discardedTile && nc.calledFrom === cur) return cp;
       }
     }
     return (cur + 1) % 4;
@@ -252,9 +254,15 @@ function buildRoundActions(players, dealer) {
         // chi / pon: emit the post-call discard
         if (typeof discEntry === 'number') {
           const tile = discEntry === 60 ? call.calledTile : discEntry;
-          if (tile != null) actions.push({ type: 'discard', player: cur, tile, tsumogiri: false });
+          if (tile != null) {
+            actions.push({ type: 'discard', player: cur, tile, tsumogiri: false });
+            cur = nextAfterDiscard(tile);
+          } else {
+            cur = (cur + 1) % 4;
+          }
+        } else {
+          cur = (cur + 1) % 4;
         }
-        cur = (cur + 1) % 4;
       }
       // minkan: same player stays for rinshan draw (no discard at this cursor position)
       continue;
@@ -267,9 +275,10 @@ function buildRoundActions(players, dealer) {
       const rMatch = discEntry.match(/^r(\d+)$/);
       if (rMatch) {
         // Riichi discard
-        actions.push({ type: 'discard', player: cur, tile: parseInt(rMatch[1], 10), riichi: true });
-        actions.push({ type: 'riichi_complete', player: cur });
-        cur = nextAfterDiscard();
+        const rTile = parseInt(rMatch[1], 10);
+        actions.push({ type: 'discard', player: cur, tile: rTile, riichi: true });
+        actions.push({ type: 'pass' });
+        cur = nextAfterDiscard(rTile);
       } else {
         // Ankan or kakan: replaces the discard slot for this turn
         const call = parseCallStr(discEntry, cur);
@@ -288,7 +297,7 @@ function buildRoundActions(players, dealer) {
     if (discEntry === undefined) { cur = (cur + 1) % 4; continue; }
     const tile = discEntry === 60 ? drawEntry : discEntry;
     actions.push({ type: 'discard', player: cur, tile, tsumogiri: discEntry === 60 });
-    cur = nextAfterDiscard();
+    cur = nextAfterDiscard(tile);
   }
 
   return actions;
