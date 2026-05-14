@@ -115,14 +115,16 @@ export function tileToString(code) {
 }
 
 // Tenhou code → Unicode character
+// U+FE0E forces text presentation so CSS color applies on mobile browsers
+const VS_TEXT = '︎';
 export function tileToUnicode(code) {
-  if (HONOR_UNICODE[code]) return HONOR_UNICODE[code];
-  if (code === 51) return '🀋'; // red 5m same glyph
-  if (code === 52) return '🀝'; // red 5p
-  if (code === 53) return '🀔'; // red 5s
-  if (code >= 11 && code <= 19) return String.fromCodePoint(UNICODE_BASE.m + (code - 10));
-  if (code >= 21 && code <= 29) return String.fromCodePoint(UNICODE_BASE.p + (code - 20));
-  if (code >= 31 && code <= 39) return String.fromCodePoint(UNICODE_BASE.s + (code - 30));
+  if (HONOR_UNICODE[code]) return HONOR_UNICODE[code] + VS_TEXT;
+  if (code === 51) return '🀋' + VS_TEXT;
+  if (code === 52) return '🀝' + VS_TEXT;
+  if (code === 53) return '🀔' + VS_TEXT;
+  if (code >= 11 && code <= 19) return String.fromCodePoint(UNICODE_BASE.m + (code - 10)) + VS_TEXT;
+  if (code >= 21 && code <= 29) return String.fromCodePoint(UNICODE_BASE.p + (code - 20)) + VS_TEXT;
+  if (code >= 31 && code <= 39) return String.fromCodePoint(UNICODE_BASE.s + (code - 30)) + VS_TEXT;
   return '?';
 }
 
