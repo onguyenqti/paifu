@@ -365,11 +365,20 @@ export function renderVisualization(state, round, playerNames, selectedActionIdx
       for (const meld of [...hand.melds].reverse()) {
         const meldEl = document.createElement('div');
         meldEl.className = 'meld';
-        // For chi, put the called tile first so the rotation always lands on it.
-        const displayTiles = meld.type === 'chi' && meld.calledTile != null
-          ? [meld.calledTile, ...meld.tiles.filter(t => t !== meld.calledTile).sort((a, b) => a - b)]
-          : meld.tiles;
+        // Arrange tiles so the called tile lands on the rotated position.
         const rotIdx = meldRotatedIndex(meld, p);
+        let displayTiles;
+        if (meld.type === 'chi' && meld.calledTile != null) {
+          displayTiles = [meld.calledTile, ...meld.tiles.filter(t => t !== meld.calledTile).sort((a, b) => a - b)];
+        } else if (meld.calledTile != null && rotIdx >= 0 && meld.tiles?.length) {
+          const rest = meld.tiles.slice();
+          const ci   = rest.indexOf(meld.calledTile);
+          if (ci !== -1) rest.splice(ci, 1);
+          rest.splice(rotIdx, 0, meld.calledTile);
+          displayTiles = rest;
+        } else {
+          displayTiles = meld.tiles;
+        }
         displayTiles.forEach((t, ti) => {
           meldEl.appendChild(ti === rotIdx ? rotatedTileEl(t) : tileEl(t, { small: true }));
         });
@@ -625,16 +634,27 @@ export function showCallModal(game, callType, state, onConfirm, onCancel) {
     return;
   }
 
-  // Pon / Kan: fromHand is always copies of the discarded tile
-  const needed       = callType === 'pon' ? 2 : 3;
-  const fromHandTiles = Array(needed).fill(discardedTile);
-  const others       = [0,1,2,3].filter(p => p !== discarder);
-  const candidates   = others.filter(p =>
-    state.hands[p].tiles.filter(t => t === discardedTile).length >= needed
-  );
+  // Pon / Kan: need 2 (pon) or 3 (kan) matching tiles from hand
+  const needed = callType === 'pon' ? 2 : 3;
+
+  // Regular and aka 5s count as the same face for eligibility
+  const FIVER_PAIR = { 15:51, 51:15, 25:52, 52:25, 35:53, 53:35 };
+  const AKA_TO_REG = { 51:15, 52:25, 53:35 };
+  const REG_TO_AKA = { 15:51, 25:52, 35:53 };
+  const countFace  = (tiles, tile) => {
+    const alt = FIVER_PAIR[tile];
+    return tiles.filter(t => t === tile || (alt !== undefined && t === alt)).length;
+  };
+  // baseHandTile: the regular tile code taken from hand (converts aka discard → regular)
+  const baseHandTile = AKA_TO_REG[discardedTile] ?? discardedTile;
+  // akaHandTile: the red-five option tile (only when discarded is the regular 5)
+  const akaHandTile  = REG_TO_AKA[discardedTile] ?? null;
+
+  const others     = [0,1,2,3].filter(p => p !== discarder);
+  const candidates = others.filter(p => countFace(state.hands[p].tiles, discardedTile) >= needed);
 
   // Determine calling player: auto if unambiguous, manual otherwise
-  let callerRef; // { get: () => number }
+  let callerRef;
   if (candidates.length === 1) {
     content.innerHTML += `<p>Caller: <strong>${players[candidates[0]]}</strong></p>`;
     callerRef = { get: () => candidates[0] };
@@ -656,6 +676,39 @@ export function showCallModal(game, callType, state, onConfirm, onCancel) {
     callerRef = { get: () => +document.getElementById('calling-player').value };
   }
 
+  // Red-five checkbox: show when ponning/kanning a regular 5 and caller has the aka in hand
+  let akaCheckbox = null;
+  if (akaHandTile && (callType === 'pon' || callType === 'kan')) {
+    const akaRow = document.createElement('div');
+    akaRow.style.cssText = 'margin:10px 0;display:none';
+    const lbl = document.createElement('label');
+    const cb  = document.createElement('input');
+    cb.type   = 'checkbox';
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(` Include red five (${tileToString(akaHandTile)})`));
+    akaRow.appendChild(lbl);
+    akaCheckbox = cb;
+
+    const updateAkaRow = () => {
+      const cp      = callerRef.get();
+      const hand    = state.hands[cp].tiles;
+      const hasAka  = hand.includes(akaHandTile);
+      if (!hasAka) { akaRow.style.display = 'none'; return; }
+      akaRow.style.display = '';
+      const regCount = hand.filter(t => t === baseHandTile).length;
+      cb.disabled = regCount < needed;
+      if (cb.disabled) cb.checked = true;
+    };
+    updateAkaRow();
+
+    if (candidates.length !== 1) {
+      content.querySelectorAll('.sel-player').forEach(btn => {
+        btn.addEventListener('click', updateAkaRow);
+      });
+    }
+    content.appendChild(akaRow);
+  }
+
   const actionRow = document.createElement('div');
   actionRow.className = 'modal-buttons';
   actionRow.style.marginTop = '12px';
@@ -666,6 +719,9 @@ export function showCallModal(game, callType, state, onConfirm, onCancel) {
   const doConfirm = () => {
     overlay.classList.add('hidden');
     overlay.removeEventListener('keydown', onKey);
+    const fromHandTiles = (akaHandTile && akaCheckbox?.checked)
+      ? [...Array(needed - 1).fill(baseHandTile), akaHandTile]
+      : Array(needed).fill(baseHandTile);
     onConfirm({ callingPlayer: callerRef.get(), fromHandTiles, calledTile: discardedTile, kanType: callType === 'kan' ? 'open' : null });
   };
   const onKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); doConfirm(); } };
@@ -838,19 +894,31 @@ export function showSelfKanModal(state, playerNames, onConfirm, onCancel) {
   const p    = state.currentPlayer;
   const hand = state.hands[p];
 
-  // Ankan: 4 of the same tile currently in hand
-  const counts = {};
-  for (const t of hand.tiles) counts[t] = (counts[t] ?? 0) + 1;
+  // Treat regular and aka 5s as the same face for kan purposes
+  const AKA_TO_REG_K = { 51:15, 52:25, 53:35 };
+  const faceOf = (t) => AKA_TO_REG_K[t] ?? t;
+  const sameFace = (a, b) => faceOf(a) === faceOf(b);
+
+  // Ankan: group hand tiles by face; need 4 of the same face
+  const faceGroups = {};
+  for (const t of hand.tiles) {
+    const f = faceOf(t);
+    (faceGroups[f] = faceGroups[f] ?? []).push(t);
+  }
   const options = [
-    ...Object.entries(counts)
-      .filter(([, c]) => c >= 4)
-      .map(([t]) => ({ type: 'ankan', tile: +t })),
-    // Kakan: existing pon meld + the 4th tile is still in hand
+    ...Object.entries(faceGroups)
+      .filter(([, ts]) => ts.length >= 4)
+      .map(([f, ts]) => ({ type: 'ankan', tile: +f, tiles: ts.slice(0, 4) })),
+    // Kakan: existing pon meld + any tile with matching face in hand
     ...hand.melds
       .filter(m => m.type === 'pon')
-      .map(m => ({ ...m, ponTile: m.calledTile ?? m.tiles?.[0] }))
-      .filter(({ ponTile }) => ponTile != null && hand.tiles.includes(ponTile))
-      .map(({ ponTile }) => ({ type: 'kakan', tile: ponTile })),
+      .flatMap(m => {
+        const ponCalledTile = m.calledTile ?? m.tiles?.[0];
+        if (ponCalledTile == null) return [];
+        const addedTile = hand.tiles.find(t => sameFace(t, ponCalledTile));
+        if (addedTile == null) return [];
+        return [{ type: 'kakan', tile: ponCalledTile, addedTile, tiles: [...(m.tiles ?? []), addedTile] }];
+      }),
   ];
 
   content.innerHTML = `<h2>Kan — ${playerNames[p]}</h2>`;

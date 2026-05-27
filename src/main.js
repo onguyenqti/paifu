@@ -248,10 +248,8 @@ function handleCall(callType) {
   if (!state || state.phase !== Phase.CALL_WINDOW) return;
   showCallModal(game, callType, state, ({ callingPlayer, fromHandTiles, calledTile, kanType }) => {
     const calledFrom = state.callWindowPlayer;
-    const allTiles   = callType === 'pon'
-      ? [calledTile, calledTile, calledTile]
-      : callType === 'kan'
-      ? [calledTile, calledTile, calledTile, calledTile]
+    const allTiles   = callType === 'pon' || callType === 'kan'
+      ? [calledTile, ...fromHandTiles]
       : [...fromHandTiles, calledTile].sort((a, b) => a - b);
     addAction({ type: callType, callingPlayer, calledFrom, calledTile, fromHand: fromHandTiles, tiles: allTiles, kanType: kanType ?? null });
     clearInput();
@@ -261,10 +259,11 @@ function handleCall(callType) {
 function handleSelfKan() {
   const state = workingState();
   if (!state || (state.phase !== Phase.DISCARD && state.phase !== Phase.CALL_DISCARD)) return;
-  showSelfKanModal(state, game.meta.players, ({ tile, type }) => {
+  showSelfKanModal(state, game.meta.players, ({ tile, type, tiles, addedTile }) => {
     const p        = state.currentPlayer;
-    const fromHand = type === 'kakan' ? [tile] : [tile, tile, tile, tile];
-    addAction({ type, callingPlayer: p, calledFrom: null, calledTile: tile, fromHand, tiles: [tile, tile, tile, tile] });
+    const allTiles = tiles ?? [tile, tile, tile, tile];
+    const fromHand = type === 'kakan' ? [addedTile ?? tile] : allTiles;
+    addAction({ type, callingPlayer: p, calledFrom: null, calledTile: tile, fromHand, tiles: allTiles });
     clearInput();
   }, () => {});
 }
